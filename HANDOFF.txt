@@ -1,0 +1,114 @@
+# estimator-api — handoff notes
+
+Context for picking this work back up. Last updated 2026-05-29.
+
+## What this is
+
+A standalone **FastAPI** service that detects tax-depreciable **renovations**
+from property photos, split out of the main Flask `rpdata-ai-server` (`../app.py`).
+It is a thin wrapper around an OpenAI **vision** call: send prompt + dataset +
+photos, format the model's JSON back out. It does **not** compute construction
+costs (the prompt forbids it).
+
+Lives in `estimator-api/`. Its own `.venv` is already created with deps installed.
+
+## How it came to be (decisions made with the user)
+
+The user drove a series of trims. In order:
+
+1. **Rewrite language** → stay Python, move Flask → FastAPI. New service only
+   for the estimate, named `estimator-api`.
+2. **Prompt source** → a local text file (`estimator_prompt.txt`), NOT Google
+   Docs. Google deps removed.
+3. The user supplied a new prompt (`estimator_prompt.txt`) that is purely a
+   **renovation detector**: matches photos to a supplied `renovationItems`
+   dataset, prices each as `FinalCost = DefaultRate × Quantity`, returns
+   `Totals.TotalRenovation`, `Summary Description`, and a `Guarantee` disclaimer.
+4. **Decisions on that prompt:** dataset comes from the **request body**;
+   **single number** (no Normal/High split); **no renovation cap**.
+5. **Output** → return **JSON only** (HTML templates + Jinja2 removed).
+6. **Removed OCC/BCI entirely** — the prompt never uses construction cost. So
+   `bci.json`, postcode premium, 1986 cutoff, 40-year deduction, the guarantee
+   band, `/initial-estimate`, and all OCC request fields were deleted. `/estimate`
+   now returns **only what the model produces**.
+7. **Added `rp_id`** — caller can pass `rpId` instead of `photos`; the service
+   fetches photos from an external API and maps them.
+
+## Current shape
+
+```
+estimator-api/
+  app/
+    main.py           # FastAPI app: POST /estimate, GET /health, secret-sauce auth, CORS
+    config.py         # pydantic-settings (.env)
+    schemas.py        # EstimateRequest, Photo
+    prompts.py        # reads estimator_prompt.txt (lru_cached)
+    openai_client.py  # vision call; sends prompt + {property,renovationItems,config} + photos
+    photos_client.py  # httpx GET to PHOTOS_API_URL.format(rp_id=...) -> list[Photo]
+    estimator.py      # build_full_estimate(): orchestrates fetch -> model -> reshape
+  estimator_prompt.txt
+  requirements.txt    # fastapi, uvicorn, pydantic, pydantic-settings, python-dotenv, openai
+  .env.example
+```
+
+### Request
+```json
+{
+  "rpId": "ABC123",                 // OR pass "photos" directly (photos win if both)
+  "renovationItems": [ { "_id": "a1", "name": "Split System AC",
+                         "defaultRate": 1200, "unit": "each" } ],
+  "config": { "exclusions": ["landscaping"] },   // optional, forwarded to model
+  "property": { "propertyType": "House" },        // optional context, forwarded
+  "model": "gpt-4.1"                              // optional override
+}
+```
+
+### Response (exactly what the model gives, currency-formatted)
+```json
+{
+  "Renovations": [ { "_id","Name","Quantity","Unit","DefaultRate","FinalCost","Year" } ],
+  "Renovations Total": "$2,400.00",
+  "Summary Description": "...",
+  "Disclaimer": "..."   // the model's "Guarantee" disclaimer, renamed
+}
+```
+
+### Photos via rp_id
+- `PHOTOS_API_URL` (in `.env`) must contain `{rp_id}`. Host is **calc.duo.tax**,
+  **no auth** (`PHOTOS_API_AUTH` empty).
+- The photos API returns a **bare JSON array** of CoreLogic-style objects.
+- `_map_photos` keeps `digitalAssetType == "Image"` and not `noPhotoAvailable`,
+  picks `largePhotoUrl → mediumPhotoUrl → basePhotoUrl`, uses `scanDate` as date.
+- Capped at 60 photos sent to the model (`MAX_PHOTOS` in openai_client.py).
+
+## OPEN ITEMS (do these next)
+
+1. **Exact `calc.duo.tax` path is unconfirmed.** I set the example to
+   `https://calc.duo.tax/{rp_id}` (rp_id appended to root). The user had left
+   before confirming whether there's a route segment (e.g. `/photos/{rp_id}`).
+   It's only a `.env` value — set it correctly and it works.
+2. **Maps-entry filter not yet added.** The real photo payload includes Google
+   `maps.googleapis.com` street-view + satellite shots and old exterior photos.
+   I offered to drop `maps.googleapis.com` entries and/or sort newest-first so
+   the 60-cap keeps recent interiors. User hadn't answered. Not yet implemented.
+3. **Never run against the real OpenAI API or the real photos API** — all
+   verification so far used mocks. Needs a real smoke test once URL + key are set.
+
+## Run / test
+
+```powershell
+cd estimator-api
+copy .env.example .env     # set OPENAI_API_KEY + PHOTOS_API_URL (+ API_KEY for auth)
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000   # docs at /docs
+```
+
+Auth: every endpoint except `/health` needs header `secret-sauce: <API_KEY>`
+(no-op if `API_KEY` unset).
+
+## Not done / out of scope so far
+- The main Flask `app.py` still has its OLD `/estimate` routes (OCC + Normal/High
+  + Google Docs prompt). It was NOT wired to this service. Decide later whether
+  to proxy it here or retire those routes.
+- The old project `.venv` may still contain jinja2 + google packages from earlier
+  installs; `requirements.txt` here is already clean.
