@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class Photo(BaseModel):
-    """A single property photo passed to the vision model."""
+    """A single property photo passed to the vision model (internal shape)."""
 
     url: str
     date: str | None = None
@@ -13,17 +13,13 @@ class Photo(BaseModel):
 class EstimateRequest(BaseModel):
     """Inputs for renovation detection.
 
-    `renovationItems` is the authoritative dataset the vision model matches
-    photos against (it may not invent items or alter rates). `config` and
-    `property` are optional and forwarded to the model verbatim as context.
+    The caller passes only `rpId`; the service fetches the property's photos
+    from calc.duo.tax and the authoritative renovation-items catalog from
+    megamind. `config` and `property` are optional and forwarded to the model
+    verbatim as context.
     """
 
-    # Either pass photos directly, or pass rp_id to have the service fetch them.
-    rp_id: str | None = Field(default=None, alias="rpId")
-    photos: list[Photo] = []
-    renovation_items: list[dict[str, Any]] = Field(
-        default_factory=list, alias="renovationItems"
-    )
+    rp_id: str = Field(alias="rpId", min_length=1)
     config: dict[str, Any] | None = None
     property: dict[str, Any] | None = None
     model: str | None = None

@@ -1,106 +1,148 @@
 # estimator-api — handoff notes
 
-Context for picking this work back up. Last updated 2026-05-29.
+Context for picking this work back up. Last updated 2026-05-30.
 
 ## What this is
 
 A standalone **FastAPI** service that detects tax-depreciable **renovations**
 from property photos, split out of the main Flask `rpdata-ai-server` (`../app.py`).
-It is a thin wrapper around an OpenAI **vision** call: send prompt + dataset +
-photos, format the model's JSON back out. It does **not** compute construction
-costs (the prompt forbids it).
+It is a thin wrapper around an OpenAI **vision** call: given an `rpId`, fetch the
+property's photos (calc.duo.tax) + the renovation-items catalog (megamind), send
+prompt + dataset + photos, format the model's JSON back out. It does **not**
+compute construction costs (the prompt forbids it).
 
-Lives in `estimator-api/`. Its own `.venv` is already created with deps installed.
+Lives in `estimator-api/`. Its own venv is `venv/` (NOT `.venv/`) with deps
+installed. Secrets go in `.env.local` (overrides `.env`, git-ignored).
 
 ## How it came to be (decisions made with the user)
 
-The user drove a series of trims. In order:
-
-1. **Rewrite language** → stay Python, move Flask → FastAPI. New service only
-   for the estimate, named `estimator-api`.
-2. **Prompt source** → a local text file (`estimator_prompt.txt`), NOT Google
-   Docs. Google deps removed.
-3. The user supplied a new prompt (`estimator_prompt.txt`) that is purely a
-   **renovation detector**: matches photos to a supplied `renovationItems`
-   dataset, prices each as `FinalCost = DefaultRate × Quantity`, returns
-   `Totals.TotalRenovation`, `Summary Description`, and a `Guarantee` disclaimer.
-4. **Decisions on that prompt:** dataset comes from the **request body**;
-   **single number** (no Normal/High split); **no renovation cap**.
+1. **Rewrite language** → stay Python, Flask → FastAPI. New service only for the
+   estimate, named `estimator-api`.
+2. **Prompt source** → local text file (`estimator_prompt.txt`), not Google Docs.
+3. The prompt is purely a **renovation detector**: matches photos to a supplied
+   `renovationItems` dataset, prices each as `FinalCost = DefaultRate × Quantity`,
+   returns `Totals.TotalRenovation`, `Summary Description`, `Guarantee`.
+4. **Decisions on that prompt:** **single number** (no Normal/High split);
+   **no renovation cap**.
 5. **Output** → return **JSON only** (HTML templates + Jinja2 removed).
 6. **Removed OCC/BCI entirely** — the prompt never uses construction cost. So
    `bci.json`, postcode premium, 1986 cutoff, 40-year deduction, the guarantee
-   band, `/initial-estimate`, and all OCC request fields were deleted. `/estimate`
-   now returns **only what the model produces**.
-7. **Added `rp_id`** — caller can pass `rpId` instead of `photos`; the service
-   fetches photos from an external API and maps them.
+   band, `/initial-estimate`, and all OCC request fields are gone.
+7. **Photos come from `rpId` only** (confirmed 2026-05-30). The service fetches
+   them from calc.duo.tax. The old `photos` request field was removed.
+8. **Model = `gpt-5.4-mini`** (vision reasoning model; chosen 2026-05-30).
+   `openai` SDK bumped 1.59.6 → 2.38.0. The vision call adapts by model family:
+   reasoning models (gpt-5.x / o-series) send `reasoning_effort=low` +
+   `max_completion_tokens` and NO temperature; classic models send
+   `temperature=0`. Still Chat Completions, still `response_format=json_object`.
+9. **Renovation items come from megamind** (added 2026-05-30). The old
+   `renovationItems` request field was **removed**; the service fetches the
+   catalog from megamind on **every** estimate. So the caller now sends only
+   `rpId` (+ optional config/property/model).
 
 ## Current shape
 
 ```
 estimator-api/
   app/
-    main.py           # FastAPI app: POST /estimate, GET /health, secret-sauce auth, CORS
-    config.py         # pydantic-settings (.env)
-    schemas.py        # EstimateRequest, Photo
-    prompts.py        # reads estimator_prompt.txt (lru_cached)
-    openai_client.py  # vision call; sends prompt + {property,renovationItems,config} + photos
-    photos_client.py  # httpx GET to PHOTOS_API_URL.format(rp_id=...) -> list[Photo]
-    estimator.py      # build_full_estimate(): orchestrates fetch -> model -> reshape
+    main.py            # FastAPI: POST /estimate, GET /health, secret-sauce auth, CORS, error mapping
+    config.py          # pydantic-settings (.env + .env.local); default model gpt-5.4-mini
+    schemas.py         # EstimateRequest (rpId required; config/property/model optional), Photo
+    prompts.py         # reads estimator_prompt.txt (lru_cached)
+    openai_client.py   # vision call; reasoning-vs-classic params
+    photos_client.py   # httpx GET calc.duo.tax -> filter/sort -> list[Photo]
+    megamind_client.py # httpx GET megamind (X-API-KEY) -> map id->_id -> list[dict]
+    estimator.py       # build_full_estimate(): items + photos -> model -> reshape
+    errors.py          # domain errors mapped to HTTP codes in main.py
   estimator_prompt.txt
-  requirements.txt    # fastapi, uvicorn, pydantic, pydantic-settings, python-dotenv, openai
+  scripts/check_photos.py    # smoke-test photos, no OpenAI key needed
+  scripts/check_items.py     # smoke-test megamind items, no OpenAI call
+  scripts/check_estimate.py  # full end-to-end smoke test (hits the paid OpenAI API)
+  tests/                     # pytest suite (32 tests, all mocked — no live calls)
+  requirements.txt           # fastapi, uvicorn, pydantic, pydantic-settings, python-dotenv, openai (2.x), httpx
+  requirements-dev.txt       # + pytest
   .env.example
 ```
 
 ### Request
 ```json
 {
-  "rpId": "ABC123",                 // OR pass "photos" directly (photos win if both)
-  "renovationItems": [ { "_id": "a1", "name": "Split System AC",
-                         "defaultRate": 1200, "unit": "each" } ],
-  "config": { "exclusions": ["landscaping"] },   // optional, forwarded to model
-  "property": { "propertyType": "House" },        // optional context, forwarded
-  "model": "gpt-4.1"                              // optional override
+  "rpId": "48819125",                          // REQUIRED — the only required field
+  "config": { "exclusions": ["landscaping"] }, // optional, forwarded to model
+  "property": { "propertyType": "House" },     // optional context (soft hint only)
+  "model": "gpt-5.4-mini"                       // optional override
 }
 ```
 
-### Response (exactly what the model gives, currency-formatted)
+### Response (what the model gives, currency-formatted)
 ```json
 {
   "Renovations": [ { "_id","Name","Quantity","Unit","DefaultRate","FinalCost","Year" } ],
-  "Renovations Total": "$2,400.00",
+  "Renovations Total": "$200.00",
   "Summary Description": "...",
   "Disclaimer": "..."   // the model's "Guarantee" disclaimer, renamed
 }
 ```
+`_id` is the megamind item id, so results map back to the catalog.
 
-### Photos via rp_id
-- `PHOTOS_API_URL` (in `.env`) must contain `{rp_id}`. Host is **calc.duo.tax**,
-  **no auth** (`PHOTOS_API_AUTH` empty).
-- The photos API returns a **bare JSON array** of CoreLogic-style objects.
-- `_map_photos` keeps `digitalAssetType == "Image"` and not `noPhotoAvailable`,
-  picks `largePhotoUrl → mediumPhotoUrl → basePhotoUrl`, uses `scanDate` as date.
-- Capped at 60 photos sent to the model (`MAX_PHOTOS` in openai_client.py).
+### Errors
+- `422` — bad/missing rpId, OR the rp_id yields no usable photos.
+- `502` — megamind OR calc.duo.tax unreachable/bad response, OR the model failed.
+
+### Renovation items via megamind  (built 2026-05-30; NOT yet live-tested)
+- Endpoint: `GET {MEGAMIND_API_URL}/api/external/estimator-items` (base URL is
+  the `MEGAMIND_API_URL` env var, default `https://api.megamind.duo.tax`; the
+  path is appended in megamind_client). Header `X-API-KEY: <MEGAMIND_API_KEY>`.
+- Returns a **bare JSON array** of catalog items (`id`, `name`, `defaultRate`,
+  `unit`, plus `sections`/audit/`isDeleted`/`isVerified` fields).
+- `_map_items` maps `id -> _id`, keeps `{_id, name, defaultRate, unit}`, drops
+  `isDeleted` items and any missing id/name/rate. To restrict to vetted items,
+  also skip `not item.get("isVerified")` (one line in megamind_client.py).
+- Fetched fresh on every estimate (user wanted no caching).
+- `python scripts/check_items.py` prints the mapped catalog (needs the key).
+
+### Photos via rpId  (CONFIRMED + smoke-tested live 2026-05-30)
+- Endpoint: `GET https://calc.duo.tax/property/{rp_id}/photos`, **no auth**.
+- Bare JSON array of CoreLogic assets. `_map_photos` keeps Image / not
+  noPhotoAvailable, drops `maps.googleapis.com` shots, picks
+  `largePhotoUrl → mediumPhotoUrl → basePhotoUrl`, uses `scanDate`, sorts
+  newest-first. Capped at 60 (`MAX_PHOTOS`).
+- Verified vs rp_id 48819125: 28 raw → 25 usable. `scripts/check_photos.py`.
 
 ## OPEN ITEMS (do these next)
 
-1. **Exact `calc.duo.tax` path is unconfirmed.** I set the example to
-   `https://calc.duo.tax/{rp_id}` (rp_id appended to root). The user had left
-   before confirming whether there's a route segment (e.g. `/photos/{rp_id}`).
-   It's only a `.env` value — set it correctly and it works.
-2. **Maps-entry filter not yet added.** The real photo payload includes Google
-   `maps.googleapis.com` street-view + satellite shots and old exterior photos.
-   I offered to drop `maps.googleapis.com` entries and/or sort newest-first so
-   the 60-cap keeps recent interiors. User hadn't answered. Not yet implemented.
-3. **Never run against the real OpenAI API or the real photos API** — all
-   verification so far used mocks. Needs a real smoke test once URL + key are set.
+1. **Megamind not live-tested yet — need the API key.** Built against the
+   sample payload only. Add `MEGAMIND_API_KEY` to `.env.local`, then run
+   `python scripts/check_items.py` to confirm the real catalog maps cleanly.
+2. **Real OpenAI end-to-end run still pending.** Once the megamind key is set,
+   `python scripts/check_estimate.py 48819125` exercises the whole pipeline
+   (megamind items + calc photos + gpt-5.4-mini; hits the paid API). Watch for:
+   reasoning models can return EMPTY content if `max_completion_tokens` is too
+   low — bump `MAX_OUTPUT_TOKENS` in openai_client.py if so.
+3. **`isVerified` filtering** — currently we send all non-deleted items. If
+   unverified items/rates shouldn't reach the model, enable the one-line filter.
+4. **Items + photos are fetched sequentially.** Two upstream GETs per estimate;
+   could run them concurrently to shave latency if it matters.
+5. **Old listing photos are mixed in** (2026 + 2019/2020 for the same property);
+   consider keeping only the most recent scan batch. Not implemented.
+6. **`property` is a soft hint** — the prompt doesn't reference it (says "infer
+   visually, no metadata provided"). To make propertyType/yearBuilt/beds/baths
+   actually steer detection, wire them into estimator_prompt.txt.
+7. **Image detail is "low"** in openai_client.py (cheap, ~512px); raise to
+   "high" if fine-finish detail matters (costs more × up to 60 images).
 
 ## Run / test
 
 ```powershell
 cd estimator-api
-copy .env.example .env     # set OPENAI_API_KEY + PHOTOS_API_URL (+ API_KEY for auth)
-.\.venv\Scripts\Activate.ps1
+copy .env.example .env.local   # set OPENAI_API_KEY + MEGAMIND_API_KEY (+ API_KEY for auth)
+.\venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --port 8000   # docs at /docs
+
+python -m pytest -q                          # 32 tests (mocked)
+python scripts/check_items.py                # live megamind catalog (needs key)
+python scripts/check_photos.py 48819125      # live photos check, no OpenAI key
+python scripts/check_estimate.py 48819125    # full end-to-end (hits paid OpenAI API)
 ```
 
 Auth: every endpoint except `/health` needs header `secret-sauce: <API_KEY>`
@@ -108,7 +150,7 @@ Auth: every endpoint except `/health` needs header `secret-sauce: <API_KEY>`
 
 ## Not done / out of scope so far
 - The main Flask `app.py` still has its OLD `/estimate` routes (OCC + Normal/High
-  + Google Docs prompt). It was NOT wired to this service. Decide later whether
-  to proxy it here or retire those routes.
-- The old project `.venv` may still contain jinja2 + google packages from earlier
-  installs; `requirements.txt` here is already clean.
+  + Google Docs prompt) and does NOT call calc/megamind. Not wired to this
+  service. Decide later whether to retire those routes or proxy here.
+- Nothing in this service has been committed beyond the initial scaffold +
+  handoff; changes are staged in the working tree for review.

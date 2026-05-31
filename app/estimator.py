@@ -1,21 +1,26 @@
 import json
 
+import openai
+
 from .config import get_settings
+from .errors import ItemsFetchError, ModelError, NoPhotosError
+from .megamind_client import fetch_renovation_items
 from .openai_client import generate_estimate
 from .photos_client import fetch_photos
 from .prompts import get_base_prompt
 from .schemas import EstimateRequest
 
 
-def _build_model_input(req: EstimateRequest) -> dict:
+def _build_model_input(req: EstimateRequest, renovation_items: list[dict]) -> dict:
     """The JSON payload the prompt expects.
 
     Photos are sent separately as vision images (see openai_client), so they
-    are not duplicated here. `property` is optional context.
+    are not duplicated here. `renovation_items` is the megamind catalog;
+    `property` and `config` are optional context.
     """
     return {
         "property": req.property or {},
-        "renovationItems": req.renovation_items,
+        "renovationItems": renovation_items,
         "config": req.config or {},
     }
 
@@ -38,22 +43,36 @@ def _format_renovations(renovations: list[dict]) -> list[dict]:
 
 
 def build_full_estimate(req: EstimateRequest) -> dict:
-    """Detect renovations from photos against the supplied dataset.
+    """Detect renovations from a property's photos against the megamind catalog.
 
-    The model matches photos to `renovationItems`, prices each line as
-    FinalCost = DefaultRate x Quantity, and returns Totals.TotalRenovation plus
-    a summary and disclaimer. We only format currency and reshape the output.
+    Fetches the renovation-items catalog from megamind and the property's photos
+    from calc.duo.tax (by rp_id), has the vision model match them
+    (FinalCost = DefaultRate x Quantity), then reshapes/currency-formats the
+    output. Raises ItemsFetchError / NoPhotosError when an upstream yields
+    nothing usable, and ModelError when the model call or its output fails.
     """
     prompt = get_base_prompt(get_settings().estimator_prompt_file)
     model = req.model or get_settings().default_model
 
-    # Photos passed directly take precedence; otherwise fetch them by rp_id.
-    photos = req.photos
-    if not photos and req.rp_id:
-        photos = fetch_photos(req.rp_id)
+    renovation_items = fetch_renovation_items()
+    if not renovation_items:
+        raise ItemsFetchError("Megamind returned no usable renovation items")
 
-    raw = generate_estimate(model, prompt, _build_model_input(req), photos)
-    estimate = json.loads(raw)
+    photos = fetch_photos(req.rp_id)
+    if not photos:
+        raise NoPhotosError(f"No usable photos found for rp_id {req.rp_id}")
+
+    try:
+        raw = generate_estimate(
+            model, prompt, _build_model_input(req, renovation_items), photos
+        )
+    except openai.OpenAIError as exc:
+        raise ModelError(f"Vision model call failed: {exc}") from exc
+
+    try:
+        estimate = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ModelError("Vision model returned invalid JSON") from exc
 
     reno_total = float(estimate.get("Totals", {}).get("TotalRenovation", 0))
 

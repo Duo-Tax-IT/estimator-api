@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
+from .errors import ItemsFetchError, ModelError, NoPhotosError, PhotosFetchError
 from .estimator import build_full_estimate
 from .schemas import EstimateRequest
 
@@ -32,4 +33,10 @@ def health() -> dict:
 
 @app.post("/estimate")
 def estimate(req: EstimateRequest, _: None = Depends(require_secret)):
-    return build_full_estimate(req)
+    try:
+        return build_full_estimate(req)
+    except NoPhotosError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (ItemsFetchError, PhotosFetchError, ModelError) as exc:
+        # Upstream failed: megamind, calc.duo.tax, or the vision model.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
