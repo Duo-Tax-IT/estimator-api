@@ -55,9 +55,9 @@ def _map_items(items: list[dict]) -> list[dict]:
     prompt expects (megamind's `id` becomes `_id`).
 
     Drops soft-deleted items and anything missing an id, name, or rate (without
-    which the model cannot match or price it). The audit fields and `sections`
-    are dropped to keep the model input compact. To restrict to vetted items,
-    also skip `not item.get("isVerified")` below.
+    which the model cannot match or price it). `isVerified` is intentionally
+    ignored — the full (non-deleted) catalog is sent. The audit fields and
+    `sections` are dropped to keep the model input compact.
     """
     mapped = []
     for item in items:

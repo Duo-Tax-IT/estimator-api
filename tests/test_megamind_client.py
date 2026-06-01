@@ -48,6 +48,12 @@ def test_map_items_drops_deleted():
     assert [i["_id"] for i in _map_items(items)] == ["keep"]
 
 
+def test_map_items_ignores_is_verified():
+    # isVerified is deliberately not a filter — unverified items still pass.
+    items = [_item(id="verified", isVerified=True), _item(id="unverified", isVerified=False)]
+    assert [i["_id"] for i in _map_items(items)] == ["verified", "unverified"]
+
+
 def test_map_items_drops_items_missing_id_name_or_rate():
     items = [
         _item(id=None),
