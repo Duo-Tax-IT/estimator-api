@@ -34,7 +34,13 @@ def _is_reasoning_model(model: str) -> bool:
 
 
 def generate_estimate(
-    model: str, prompt: str, model_input: dict, photos: list[Photo]
+    model: str,
+    prompt: str,
+    model_input: dict,
+    photos: list[Photo],
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Call the vision model with the prompt, input data, and property photos.
 
@@ -43,8 +49,9 @@ def generate_estimate(
     model.
 
     Reasoning-class models (gpt-5.x, o-series) get `reasoning_effort` and no
-    temperature; classic chat models get `temperature=0`. Both cap output via
-    `max_completion_tokens` and request a JSON object.
+    temperature; classic chat models get `temperature`. Both default to
+    REASONING_EFFORT / 0 when the caller doesn't override them, cap output via
+    `max_completion_tokens`, and request a JSON object.
     """
     content: list[dict] = [
         {"type": "text", "text": prompt},
@@ -69,9 +76,9 @@ def generate_estimate(
         "response_format": {"type": "json_object"},
     }
     if _is_reasoning_model(model):
-        kwargs["reasoning_effort"] = REASONING_EFFORT
+        kwargs["reasoning_effort"] = reasoning_effort or REASONING_EFFORT
     else:
-        kwargs["temperature"] = 0
+        kwargs["temperature"] = temperature if temperature is not None else 0
 
     response = _client().chat.completions.create(**kwargs)
     return response.choices[0].message.content

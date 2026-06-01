@@ -174,7 +174,18 @@
 
     details.settings { margin-top: 32px; }
     details.settings summary { color: var(--muted); font-size: 13px; cursor: pointer; }
-    details.settings input { margin-top: 10px; width: 100%; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 14px; }
+    details.settings .setrow { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; }
+    details.settings .setrow label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    details.settings .setrow .help { text-transform: none; letter-spacing: 0; opacity: .8; }
+    details.settings input, details.settings select {
+      width: 100%; padding: 10px 12px; background: var(--panel);
+      border: 1px solid var(--border); border-radius: 10px; color: var(--text);
+      font-size: 14px; outline: none;
+    }
+    details.settings input:focus, details.settings select:focus { border-color: var(--accent); }
+    details.settings .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    details.settings .grid2 .setrow { margin-top: 0; min-width: 0; }
+    @media (max-width: 620px) { details.settings .grid2 { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -228,8 +239,40 @@
     </section>
 
     <details class="settings">
-      <summary>Settings</summary>
-      <input id="apiKey" type="password" placeholder="secret-sauce header (only if the API requires one)" />
+      <summary>Model &amp; settings</summary>
+
+      <div class="setrow">
+        <label for="model">Model <span class="help">— blank uses the server default</span></label>
+        <input id="model" type="text" list="modelOptions" placeholder="e.g. gpt-5.4-mini" autocomplete="off" />
+        <datalist id="modelOptions">
+          <option value="gpt-5.4-mini"></option>
+          <option value="gpt-5.4"></option>
+          <option value="gpt-4.1"></option>
+          <option value="gpt-4o"></option>
+        </datalist>
+      </div>
+
+      <div class="grid2" style="margin-top:14px;">
+        <div class="setrow">
+          <label for="reasoningEffort">Reasoning effort <span class="help">— gpt-5.x / o-series</span></label>
+          <select id="reasoningEffort">
+            <option value="">Default (low)</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+        <div class="setrow">
+          <label for="temperature">Temperature <span class="help">— classic models</span></label>
+          <input id="temperature" type="number" min="0" max="2" step="0.1" placeholder="Default (0)" />
+        </div>
+      </div>
+
+      <div class="setrow">
+        <label for="apiKey">Auth</label>
+        <input id="apiKey" type="password" placeholder="secret-sauce header (only if the API requires one)" />
+      </div>
     </details>
   </div>
 
@@ -337,6 +380,13 @@
         const body = { rpId: String(s.suggestionId) };
         const override = buildOverride();
         if (override) body.property = override;
+
+        const model = $("model").value.trim();
+        if (model) body.model = model;
+        const effort = $("reasoningEffort").value;
+        if (effort) body.reasoningEffort = effort;
+        const temp = $("temperature").value.trim();
+        if (temp !== "") body.temperature = Number(temp);
 
         const resp = await fetch("/estimate", {
           method: "POST",
