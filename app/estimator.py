@@ -76,6 +76,8 @@ def build_full_estimate(req: EstimateRequest) -> dict:
             prompt,
             _build_model_input(property_data, renovation_items, req.config or {}),
             photos,
+            reasoning_effort=req.reasoning_effort,
+            temperature=req.temperature,
         )
     except openai.OpenAIError as exc:
         raise ModelError(f"Vision model call failed: {exc}") from exc

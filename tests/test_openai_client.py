@@ -56,6 +56,40 @@ def test_classic_model_uses_temperature_no_reasoning(monkeypatch):
     assert "max_completion_tokens" in sink
 
 
+def test_reasoning_effort_override_is_applied(monkeypatch):
+    sink = {}
+    monkeypatch.setattr(openai_client, "_client", lambda: _FakeClient(sink))
+    openai_client.generate_estimate(
+        "gpt-5.4-mini", "prompt", {"x": 1}, [Photo(url="https://x/a")],
+        reasoning_effort="high",
+    )
+    assert sink["reasoning_effort"] == "high"
+    assert "temperature" not in sink
+
+
+def test_temperature_override_is_applied_for_classic(monkeypatch):
+    sink = {}
+    monkeypatch.setattr(openai_client, "_client", lambda: _FakeClient(sink))
+    openai_client.generate_estimate(
+        "gpt-4.1", "prompt", {"x": 1}, [Photo(url="https://x/a")],
+        temperature=0.7,
+    )
+    assert sink["temperature"] == 0.7
+    assert "reasoning_effort" not in sink
+
+
+def test_reasoning_effort_ignored_for_classic_model(monkeypatch):
+    # A reasoning_effort sent to a classic model must not leak into the call.
+    sink = {}
+    monkeypatch.setattr(openai_client, "_client", lambda: _FakeClient(sink))
+    openai_client.generate_estimate(
+        "gpt-4.1", "prompt", {"x": 1}, [Photo(url="https://x/a")],
+        reasoning_effort="high",
+    )
+    assert "reasoning_effort" not in sink
+    assert sink["temperature"] == 0
+
+
 def test_is_reasoning_model_classification():
     assert openai_client._is_reasoning_model("gpt-5.4-mini")
     assert openai_client._is_reasoning_model("o3-mini")

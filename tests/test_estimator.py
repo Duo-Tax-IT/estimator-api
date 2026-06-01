@@ -52,7 +52,7 @@ def test_build_full_estimate_formats_and_reshapes(monkeypatch):
     _patch_upstreams(monkeypatch)
     captured = {}
 
-    def fake_generate(model, prompt, model_input, photos):
+    def fake_generate(model, prompt, model_input, photos, **kwargs):
         captured.update(model=model, model_input=model_input, photos=photos)
         return _model_json()
 
@@ -77,7 +77,7 @@ def test_build_full_estimate_property_override(monkeypatch):
     _patch_upstreams(monkeypatch)
     captured = {}
 
-    def fake_generate(model, prompt, model_input, photos):
+    def fake_generate(model, prompt, model_input, photos, **kwargs):
         captured.update(model_input=model_input)
         return _model_json(Renovations=[], Totals={"TotalRenovation": 0})
 
@@ -115,7 +115,7 @@ def test_build_full_estimate_uses_model_override(monkeypatch):
     _patch_upstreams(monkeypatch)
     seen = {}
 
-    def fake_generate(model, prompt, model_input, photos):
+    def fake_generate(model, prompt, model_input, photos, **kwargs):
         seen["model"] = model
         return _model_json(Renovations=[], Totals={"TotalRenovation": 0})
 
