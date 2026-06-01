@@ -324,7 +324,7 @@
       activeQuery = s.suggestion;
       resultEl.classList.remove("show");
       showError("");
-      showStatus(`Estimating renovations for ${s.suggestion}…`);
+      showStatus("Thinking…");
 
       // Photos load in parallel — they're non-fatal to the estimate.
       loadPhotos(s.suggestionId);
