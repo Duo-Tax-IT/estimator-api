@@ -6,7 +6,7 @@ vision model. No OpenAI key required.
 
 Usage (from the estimator-api/ root):
     python scripts/check_photos.py <rp_id>
-    PHOTOS_API_URL="https://.../{rp_id}/photos" python scripts/check_photos.py <rp_id>
+    RPDATA_API_URL="https://.../{rp_id}" python scripts/check_photos.py <rp_id>
 """
 
 import os
@@ -17,9 +17,9 @@ import httpx
 # Allow `import app...` when run from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.photos_client import _map_photos  # noqa: E402
+from app.rpdata_client import _map_photos  # noqa: E402
 
-DEFAULT_URL = "https://calc.duo.tax/property/{rp_id}/photos"
+DEFAULT_URL = "https://calc.duo.tax/property/{rp_id}"
 
 
 def main() -> None:
@@ -28,7 +28,8 @@ def main() -> None:
         raise SystemExit(2)
 
     rp_id = sys.argv[1]
-    url = os.environ.get("PHOTOS_API_URL", DEFAULT_URL).format(rp_id=rp_id)
+    base = os.environ.get("RPDATA_API_URL", DEFAULT_URL).format(rp_id=rp_id)
+    url = base.rstrip("/") + "/photos"
     print(f"GET {url}")
 
     resp = httpx.get(url, timeout=30)

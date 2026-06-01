@@ -26,14 +26,15 @@ class Settings(BaseSettings):
     # gpt-5.4-mini is a vision-capable reasoning model.
     default_model: str = "gpt-5.4-mini"
 
-    # calc.duo.tax endpoint that returns a property's photos for an rp_id. This
-    # is the SOLE source of photos: callers pass `rpId`, never raw photos. Must
-    # contain the `{rp_id}` placeholder.
-    photos_api_url: str = "https://calc.duo.tax/property/{rp_id}/photos"
+    # Base rpdata (calc.duo.tax) endpoint for a property, keyed by rp_id. The
+    # client appends `/photos` for the photos payload and uses the base URL for
+    # property attributes. Callers pass `rpId`, never raw photos/attributes.
+    # Must contain the `{rp_id}` placeholder.
+    rpdata_api_url: str = "https://calc.duo.tax/property/{rp_id}"
 
-    # Optional Authorization header value sent to the photos API.
+    # Optional Authorization header value sent to the rpdata API.
     # calc.duo.tax currently needs none; leave unset.
-    photos_api_auth: str | None = None
+    rpdata_api_auth: str | None = None
 
     # Base URL of the megamind API. The estimator-items endpoint path is
     # appended in megamind_client; the catalog is fetched fresh on every estimate.

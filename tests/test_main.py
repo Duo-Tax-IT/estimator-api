@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app import main
-from app.errors import ItemsFetchError, NoPhotosError, PhotosFetchError
+from app.errors import ItemsFetchError, NoPhotosError, RpDataFetchError
 from app.main import app
 
 client = TestClient(app)
@@ -56,7 +56,7 @@ def test_estimate_items_error_maps_to_502(monkeypatch):
 
 def test_estimate_photos_error_maps_to_502(monkeypatch):
     def boom(req):
-        raise PhotosFetchError("calc.duo.tax unreachable")
+        raise RpDataFetchError("calc.duo.tax unreachable")
 
     monkeypatch.setattr(main, "build_full_estimate", boom)
     assert client.post("/estimate", json=VALID_BODY).status_code == 502

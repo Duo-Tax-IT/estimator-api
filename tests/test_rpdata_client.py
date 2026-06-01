@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from app import photos_client
-from app.errors import PhotosFetchError
-from app.photos_client import _map_photos, fetch_photos
+from app import rpdata_client
+from app.errors import RpDataFetchError
+from app.rpdata_client import _map_photos, fetch_photos, fetch_property
 
 
 def _img(url, date="2024-01-01", **extra):
@@ -105,7 +105,7 @@ def test_fetch_photos_success_formats_url(monkeypatch):
         captured["url"] = url
         return _FakeResp([_img("https://x/a")])
 
-    monkeypatch.setattr(photos_client.httpx, "get", fake_get)
+    monkeypatch.setattr(rpdata_client.httpx, "get", fake_get)
     photos = fetch_photos("RP1")
     assert captured["url"] == "https://calc.duo.tax/property/RP1/photos"
     assert [p.url for p in photos] == ["https://x/a"]
@@ -115,26 +115,67 @@ def test_fetch_photos_connection_error_raises(monkeypatch):
     def boom(url, headers=None, timeout=None):
         raise httpx.ConnectError("nope")
 
-    monkeypatch.setattr(photos_client.httpx, "get", boom)
-    with pytest.raises(PhotosFetchError):
+    monkeypatch.setattr(rpdata_client.httpx, "get", boom)
+    with pytest.raises(RpDataFetchError):
         fetch_photos("RP1")
 
 
 def test_fetch_photos_non_200_raises(monkeypatch):
     monkeypatch.setattr(
-        photos_client.httpx,
+        rpdata_client.httpx,
         "get",
         lambda url, headers=None, timeout=None: _FakeResp(None, status=500),
     )
-    with pytest.raises(PhotosFetchError):
+    with pytest.raises(RpDataFetchError):
         fetch_photos("RP1")
 
 
 def test_fetch_photos_non_list_payload_raises(monkeypatch):
     monkeypatch.setattr(
-        photos_client.httpx,
+        rpdata_client.httpx,
         "get",
         lambda url, headers=None, timeout=None: _FakeResp({"not": "a list"}),
     )
-    with pytest.raises(PhotosFetchError):
+    with pytest.raises(RpDataFetchError):
         fetch_photos("RP1")
+
+
+def test_fetch_property_merges_attr_groups_and_uses_base_url(monkeypatch):
+    captured = {}
+    payload = {
+        "attrCore": {"beds": "1", "propertyType": "UNIT"},
+        "attrAdditional": {"yearBuilt": "1930", "floorArea": 200},
+    }
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["url"] = url
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(rpdata_client.httpx, "get", fake_get)
+    prop = fetch_property("RP1")
+    assert captured["url"] == "https://calc.duo.tax/property/RP1"
+    assert prop == {
+        "beds": "1",
+        "propertyType": "UNIT",
+        "yearBuilt": "1930",
+        "floorArea": 200,
+    }
+
+
+def test_fetch_property_tolerates_missing_groups(monkeypatch):
+    monkeypatch.setattr(
+        rpdata_client.httpx,
+        "get",
+        lambda url, headers=None, timeout=None: _FakeResp({"attrCore": {"beds": "2"}}),
+    )
+    assert fetch_property("RP1") == {"beds": "2"}
+
+
+def test_fetch_property_non_dict_payload_raises(monkeypatch):
+    monkeypatch.setattr(
+        rpdata_client.httpx,
+        "get",
+        lambda url, headers=None, timeout=None: _FakeResp(["not", "a", "dict"]),
+    )
+    with pytest.raises(RpDataFetchError):
+        fetch_property("RP1")

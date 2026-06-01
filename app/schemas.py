@@ -13,10 +13,11 @@ class Photo(BaseModel):
 class EstimateRequest(BaseModel):
     """Inputs for renovation detection.
 
-    The caller passes only `rpId`; the service fetches the property's photos
-    from calc.duo.tax and the authoritative renovation-items catalog from
-    megamind. `config` and `property` are optional and forwarded to the model
-    verbatim as context.
+    The caller passes `rpId`; the service fetches the property's photos from
+    rpdata (calc.duo.tax) and the authoritative renovation-items catalog from
+    megamind. `property` is an optional override: when omitted, the service
+    fetches the property's attributes from rpdata. `config` is optional context
+    forwarded to the model verbatim.
     """
 
     rp_id: str = Field(alias="rpId", min_length=1)

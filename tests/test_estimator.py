@@ -38,11 +38,14 @@ def _model_json(**overrides):
     return json.dumps(payload)
 
 
-def _patch_upstreams(monkeypatch, items=SAMPLE_ITEMS, photos=None):
+def _patch_upstreams(monkeypatch, items=SAMPLE_ITEMS, photos=None, property=None):
     if photos is None:
         photos = [Photo(url="https://x/a", date="2024-01-01")]
+    if property is None:
+        property = {"beds": "1", "propertyType": "UNIT"}
     monkeypatch.setattr(estimator, "fetch_renovation_items", lambda: items)
     monkeypatch.setattr(estimator, "fetch_photos", lambda rp_id: photos)
+    monkeypatch.setattr(estimator, "fetch_property", lambda rp_id: property)
 
 
 def test_build_full_estimate_formats_and_reshapes(monkeypatch):
@@ -66,6 +69,27 @@ def test_build_full_estimate_formats_and_reshapes(monkeypatch):
     assert captured["model"] == "gpt-5.4-mini"
     assert captured["model_input"]["renovationItems"] == SAMPLE_ITEMS
     assert [p.url for p in captured["photos"]] == ["https://x/a"]
+    # property defaults to the attributes rpdata holds for the rp_id
+    assert captured["model_input"]["property"] == {"beds": "1", "propertyType": "UNIT"}
+
+
+def test_build_full_estimate_property_override(monkeypatch):
+    _patch_upstreams(monkeypatch)
+    captured = {}
+
+    def fake_generate(model, prompt, model_input, photos):
+        captured.update(model_input=model_input)
+        return _model_json(Renovations=[], Totals={"TotalRenovation": 0})
+
+    monkeypatch.setattr(estimator, "generate_estimate", fake_generate)
+    # fetch_property would raise if called; a caller override must short-circuit it
+    monkeypatch.setattr(
+        estimator, "fetch_property", lambda rp_id: pytest.fail("should not fetch")
+    )
+
+    override = {"beds": "4", "source": "caller"}
+    estimator.build_full_estimate(_req(property=override))
+    assert captured["model_input"]["property"] == override
 
 
 def test_build_full_estimate_no_items_raises(monkeypatch):

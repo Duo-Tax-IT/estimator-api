@@ -5,7 +5,7 @@ import os
 # before app modules import config.
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault(
-    "PHOTOS_API_URL", "https://calc.duo.tax/property/{rp_id}/photos"
+    "RPDATA_API_URL", "https://calc.duo.tax/property/{rp_id}"
 )
 os.environ.setdefault("MEGAMIND_API_URL", "https://api.megamind.duo.tax")
 os.environ.setdefault("MEGAMIND_API_KEY", "test-key")

@@ -30,7 +30,7 @@ copy .env.example .env.local             # then fill in your real values
 Put real secrets in `.env.local` — it overrides `.env` and is git-ignored, so
 live keys never get committed. At minimum set `OPENAI_API_KEY` and
 `MEGAMIND_API_KEY`. The default model is `gpt-5.4-mini` (a vision-capable
-reasoning model); `PHOTOS_API_URL` and `MEGAMIND_API_URL` already point at the
+reasoning model); `RPDATA_API_URL` and `MEGAMIND_API_URL` already point at the
 right endpoints.
 
 The prompt lives in `estimator_prompt.txt` (override the path with
@@ -65,8 +65,10 @@ is passed in the request.
 - `rpId` — **required**. Property id; photos come from
   `https://calc.duo.tax/property/{rpId}/photos`.
 - `config` — optional rules (exclusions, etc.), forwarded to the model verbatim.
-- `property` — optional context, forwarded verbatim (the prompt currently treats
-  it as a soft hint only — see the handoff notes).
+- `property` — optional **override**. When omitted, the service fetches the
+  property's attributes from rpdata (`attrCore` + `attrAdditional`, flattened)
+  and uses those. When provided, your dict is used verbatim and the rpdata fetch
+  is skipped.
 - `model` — optional OpenAI model override (defaults to `DEFAULT_MODEL`,
   `gpt-5.4-mini`). Reasoning models (gpt-5.x, o-series) automatically use
   `reasoning_effort`; classic models use `temperature=0`.
@@ -118,16 +120,24 @@ Smoke-test it (no OpenAI call):
 python scripts/check_items.py
 ```
 
-## Photos (calc.duo.tax)
+## RP Data (calc.duo.tax)
 
-`GET https://calc.duo.tax/property/{rp_id}/photos` returns a bare JSON array of
-CoreLogic-style assets. `app/photos_client.py`:
+`RPDATA_API_URL` is the base property endpoint (`.../property/{rp_id}`).
+`app/rpdata_client.py` talks to two resources off it:
+
+**Photos** — `GET .../property/{rp_id}/photos` returns a bare JSON array of
+CoreLogic-style assets. `fetch_photos`:
 
 - keeps only `digitalAssetType == "Image"` that aren't `noPhotoAvailable`;
 - drops Google street-view / satellite shots (`maps.googleapis.com`);
 - prefers `largePhotoUrl → mediumPhotoUrl → basePhotoUrl`;
 - uses `scanDate` as the photo date and sorts **newest-first**;
 - the vision model receives at most `MAX_PHOTOS` (60) images.
+
+**Property attributes** — `GET .../property/{rp_id}` returns an object with
+`attrCore` and `attrAdditional` groups. `fetch_property` flattens both into one
+dict, used as the model's `property` context when the request omits a `property`
+override. A caller-supplied `property` short-circuits this fetch.
 
 Smoke-test the photos integration **without** calling OpenAI:
 

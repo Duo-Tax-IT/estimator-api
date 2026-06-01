@@ -50,9 +50,9 @@ estimator-api/
     schemas.py         # EstimateRequest (rpId required; config/property/model optional), Photo
     prompts.py         # reads estimator_prompt.txt (lru_cached)
     openai_client.py   # vision call; reasoning-vs-classic params
-    photos_client.py   # httpx GET calc.duo.tax -> filter/sort -> list[Photo]
+    rpdata_client.py   # httpx GET calc.duo.tax -> photos (filter/sort) + property attrs (flatten)
     megamind_client.py # httpx GET megamind (X-API-KEY) -> map id->_id -> list[dict]
-    estimator.py       # build_full_estimate(): items + photos -> model -> reshape
+    estimator.py       # build_full_estimate(): items + photos + property -> model -> reshape
     errors.py          # domain errors mapped to HTTP codes in main.py
   estimator_prompt.txt
   scripts/check_photos.py    # smoke-test photos, no OpenAI key needed

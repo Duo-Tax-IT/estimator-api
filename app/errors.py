@@ -2,8 +2,8 @@ class EstimatorError(Exception):
     """Base class for domain errors that main.py maps to HTTP responses."""
 
 
-class PhotosFetchError(EstimatorError):
-    """The photos API (calc.duo.tax) was unreachable or returned a bad response."""
+class RpDataFetchError(EstimatorError):
+    """The rpdata API (calc.duo.tax) was unreachable or returned a bad response."""
 
 
 class ItemsFetchError(EstimatorError):

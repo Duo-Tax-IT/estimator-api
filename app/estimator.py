@@ -6,22 +6,25 @@ from .config import get_settings
 from .errors import ItemsFetchError, ModelError, NoPhotosError
 from .megamind_client import fetch_renovation_items
 from .openai_client import generate_estimate
-from .photos_client import fetch_photos
 from .prompts import get_base_prompt
+from .rpdata_client import fetch_photos, fetch_property
 from .schemas import EstimateRequest
 
 
-def _build_model_input(req: EstimateRequest, renovation_items: list[dict]) -> dict:
+def _build_model_input(
+    property_data: dict, renovation_items: list[dict], config: dict
+) -> dict:
     """The JSON payload the prompt expects.
 
     Photos are sent separately as vision images (see openai_client), so they
     are not duplicated here. `renovation_items` is the megamind catalog;
-    `property` and `config` are optional context.
+    `property_data` is the (caller- or rpdata-sourced) attributes and `config`
+    is optional context.
     """
     return {
-        "property": req.property or {},
+        "property": property_data,
         "renovationItems": renovation_items,
-        "config": req.config or {},
+        "config": config,
     }
 
 
@@ -46,7 +49,8 @@ def build_full_estimate(req: EstimateRequest) -> dict:
     """Detect renovations from a property's photos against the megamind catalog.
 
     Fetches the renovation-items catalog from megamind and the property's photos
-    from calc.duo.tax (by rp_id), has the vision model match them
+    from rpdata (by rp_id) — plus its attributes when the caller supplies no
+    `property` override — has the vision model match them
     (FinalCost = DefaultRate x Quantity), then reshapes/currency-formats the
     output. Raises ItemsFetchError / NoPhotosError when an upstream yields
     nothing usable, and ModelError when the model call or its output fails.
@@ -62,9 +66,16 @@ def build_full_estimate(req: EstimateRequest) -> dict:
     if not photos:
         raise NoPhotosError(f"No usable photos found for rp_id {req.rp_id}")
 
+    # Use the caller-supplied property as an override; otherwise fall back to
+    # the attributes rpdata holds for this rp_id.
+    property_data = req.property or fetch_property(req.rp_id)
+
     try:
         raw = generate_estimate(
-            model, prompt, _build_model_input(req, renovation_items), photos
+            model,
+            prompt,
+            _build_model_input(property_data, renovation_items, req.config or {}),
+            photos,
         )
     except openai.OpenAIError as exc:
         raise ModelError(f"Vision model call failed: {exc}") from exc
