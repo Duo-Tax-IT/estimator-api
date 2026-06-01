@@ -17,6 +17,12 @@ _EXCLUDED_URL_HOSTS = ("maps.googleapis.com",)
 _PROPERTY_ATTR_GROUPS = ("attrCore", "attrAdditional")
 
 
+def _auth_headers() -> dict:
+    """Authorization header for rpdata, when one is configured (else empty)."""
+    auth = get_settings().rpdata_api_auth
+    return {"Authorization": auth} if auth else {}
+
+
 def _property_url(rp_id: str) -> str:
     """Base rpdata URL for a property (e.g. https://calc.duo.tax/property/<rp_id>)."""
     settings = get_settings()
@@ -32,13 +38,8 @@ def _get_json(url: str, rp_id: str, what: str):
     or returns a body that isn't valid JSON. `what` names the resource for
     error messages (e.g. "photos", "property").
     """
-    settings = get_settings()
-    headers = {}
-    if settings.rpdata_api_auth:
-        headers["Authorization"] = settings.rpdata_api_auth
-
     try:
-        resp = httpx.get(url, headers=headers, timeout=30)
+        resp = httpx.get(url, headers=_auth_headers(), timeout=30)
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         raise RpDataFetchError(
@@ -51,6 +52,45 @@ def _get_json(url: str, rp_id: str, what: str):
         raise RpDataFetchError(
             f"RP Data API returned non-JSON {what} for rp_id {rp_id}"
         ) from exc
+
+
+def search_addresses(query: str) -> list[dict]:
+    """Search calc.duo.tax for address suggestions matching `query`.
+
+    Returns the raw `suggestions` list; each entry carries `suggestion` (the
+    display string) and `suggestionId` — which is the property's rp_id. Raises
+    RpDataFetchError if rpdata is unreachable or returns an unexpected body.
+    """
+    settings = get_settings()
+    if not settings.rpdata_search_url:
+        raise RpDataFetchError("RPDATA_SEARCH_URL is not configured")
+
+    try:
+        resp = httpx.get(
+            settings.rpdata_search_url,
+            params={"q": query},
+            headers=_auth_headers(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise RpDataFetchError(
+            f"Could not search addresses for {query!r}: {exc}"
+        ) from exc
+
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RpDataFetchError(
+            f"RP Data search returned non-JSON for {query!r}"
+        ) from exc
+
+    suggestions = payload.get("suggestions") if isinstance(payload, dict) else None
+    if not isinstance(suggestions, list):
+        raise RpDataFetchError(
+            f"RP Data search returned no suggestions list for {query!r}"
+        )
+    return suggestions
 
 
 def fetch_photos(rp_id: str) -> list[Photo]:

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # calc.duo.tax currently needs none; leave unset.
     rpdata_api_auth: str | None = None
 
+    # calc.duo.tax address-autocomplete endpoint. Called with `?q=<address>`;
+    # returns {"suggestions": [{suggestionId (= rp_id), suggestion, ...}]}.
+    rpdata_search_url: str = "https://calc.duo.tax/search"
+
     # Base URL of the megamind API. The estimator-items endpoint path is
     # appended in megamind_client; the catalog is fetched fresh on every estimate.
     megamind_api_url: str = "https://api.megamind.duo.tax"

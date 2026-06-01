@@ -15,6 +15,55 @@ def test_health_ok():
     assert r.json() == {"status": "ok"}
 
 
+def test_index_serves_frontend():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Renovation Estimator" in r.text
+
+
+def test_search_returns_suggestions(monkeypatch):
+    suggestions = [{"suggestion": "1 Fullarton Street", "suggestionId": 9236365}]
+    monkeypatch.setattr(main, "search_addresses", lambda q: suggestions)
+    r = client.get("/search", params={"q": "1 Fullarton"})
+    assert r.status_code == 200
+    assert r.json() == {"suggestions": suggestions}
+
+
+def test_search_requires_query():
+    assert client.get("/search").status_code == 422
+
+
+def test_search_upstream_error_maps_to_502(monkeypatch):
+    def boom(q):
+        raise RpDataFetchError("calc.duo.tax unreachable")
+
+    monkeypatch.setattr(main, "search_addresses", boom)
+    assert client.get("/search", params={"q": "x"}).status_code == 502
+
+
+def test_photos_returns_mapped_photos(monkeypatch):
+    from app.schemas import Photo
+
+    monkeypatch.setattr(
+        main, "fetch_photos", lambda rp_id: [Photo(url="https://x/a", date="2024-01-01")]
+    )
+    r = client.get("/photos", params={"rpId": "RP1"})
+    assert r.status_code == 200
+    assert r.json() == {"photos": [{"url": "https://x/a", "date": "2024-01-01"}]}
+
+
+def test_photos_requires_rpid():
+    assert client.get("/photos").status_code == 422
+
+
+def test_photos_upstream_error_maps_to_502(monkeypatch):
+    def boom(rp_id):
+        raise RpDataFetchError("calc.duo.tax unreachable")
+
+    monkeypatch.setattr(main, "fetch_photos", boom)
+    assert client.get("/photos", params={"rpId": "RP1"}).status_code == 502
+
+
 def test_estimate_requires_rpid():
     assert client.post("/estimate", json={}).status_code == 422
 

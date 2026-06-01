@@ -3,7 +3,12 @@ import pytest
 
 from app import rpdata_client
 from app.errors import RpDataFetchError
-from app.rpdata_client import _map_photos, fetch_photos, fetch_property
+from app.rpdata_client import (
+    _map_photos,
+    fetch_photos,
+    fetch_property,
+    search_addresses,
+)
 
 
 def _img(url, date="2024-01-01", **extra):
@@ -179,3 +184,38 @@ def test_fetch_property_non_dict_payload_raises(monkeypatch):
     )
     with pytest.raises(RpDataFetchError):
         fetch_property("RP1")
+
+
+def test_search_addresses_returns_suggestions_and_passes_query(monkeypatch):
+    captured = {}
+    suggestions = [{"suggestion": "1 Fullarton St", "suggestionId": 9236365}]
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        return _FakeResp({"suggestions": suggestions})
+
+    monkeypatch.setattr(rpdata_client.httpx, "get", fake_get)
+    out = search_addresses("1 Fullarton")
+    assert out == suggestions
+    assert captured["url"] == "https://calc.duo.tax/search"
+    assert captured["params"] == {"q": "1 Fullarton"}
+
+
+def test_search_addresses_missing_suggestions_raises(monkeypatch):
+    monkeypatch.setattr(
+        rpdata_client.httpx,
+        "get",
+        lambda url, params=None, headers=None, timeout=None: _FakeResp({"x": 1}),
+    )
+    with pytest.raises(RpDataFetchError):
+        search_addresses("nope")
+
+
+def test_search_addresses_http_error_raises(monkeypatch):
+    def boom(url, params=None, headers=None, timeout=None):
+        raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(rpdata_client.httpx, "get", boom)
+    with pytest.raises(RpDataFetchError):
+        search_addresses("x")
