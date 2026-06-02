@@ -39,9 +39,12 @@ and rejects weak candidates with explicit reasons.
 **Design decision — Step 4 is NOT a model call.** The spec's original 4-step
 diagram had an LLM "final formatter". Because v2 returns the deterministic
 current response shape, formatting is plain Python (as `build_full_estimate`
-already does today). Step 2 emits the `summary`; the disclaimer is the fixed
-Guarantee sentence. This removes a model call, cost, latency, and a failure
-point with no loss of behavior.
+already does today). Step 2 emits the `summary`; the `Disclaimer` is a Python
+constant `DISCLAIMER` in `estimator_v2.py` holding the exact Guarantee sentence
+from `estimator_prompt.txt` ("This assessment is based solely on visual
+analysis of provided images and uses a predefined renovation item dataset. No
+external cost estimation methods were used."). This removes a model call, cost,
+latency, and a failure point with no loss of behavior.
 
 ## Stage data flow
 
@@ -67,15 +70,17 @@ fetch (catalog, photos, property, gfa)        # reused upstream calls
 | `areaForTool` (sqm items, else null) | `area` |
 | `estimatedYear` → `_bci_factor(state, year)` | `factor` |
 
-`estimatedYear` is also written onto each priced renovation as `Year` (drives
-`split_by_owner`).
+`state` is derived the same way as v1: `state = extract_state(req.address)`
+(`from .rpdata_client import extract_state`). `estimatedYear` is also written
+onto each priced renovation as `Year` (drives `split_by_owner`).
 
 ## New / changed files
 
 - **New** `app/estimator_v2.py` — `build_estimate_v2(req)` orchestrator.
   Reuses the catalog/photo/property/gfa fetches; imports
   `_build_model_input`, `_bci_factor`, `split_by_owner`, `_format_renovations`,
-  `_money` from `estimator.py`.
+  `_money` from `estimator.py`, and `extract_state` from `rpdata_client`.
+  Defines the `DISCLAIMER` constant.
 - **New** in `app/openai_client.py` — `observe_photos(...)`,
   `match_candidates(...)`, and a shared `_chat_json(...)` helper (single
   create call, `json_object` response_format, **no tools**, usage logged).
@@ -99,7 +104,8 @@ Identical to `/estimate`:
   "observations": { "photoObservations": [ ... ] },   // step 1 raw
   "candidates":   { "validatedCandidates": [ ... ],
                     "rejectedCandidates": [ ... ] },   // step 2 raw
-  "toolInput":    [ { "_id": "...", "area": 42 }, ... ] // step 3 input
+  "toolInput":    [ { "_id": "...", "name": "...",      // step 3 input
+                      "area": 42, "factor": 1.0 }, ... ] // (as passed to price_items)
 }
 ```
 
