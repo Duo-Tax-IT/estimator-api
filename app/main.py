@@ -2,12 +2,14 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from .config import get_settings
 from .errors import ItemsFetchError, ModelError, NoPhotosError, RpDataFetchError
-from .estimator import build_full_estimate
+from .estimator import build_full_estimate, preview_estimate_prompt
+from .prompts import get_base_prompt
 from .rpdata_client import fetch_photos, search_addresses
+from .runs_db import list_runs, save_run
 from .schemas import EstimateRequest
 
 app = FastAPI(title="Estimator API", version="1.0.0")
@@ -65,12 +67,46 @@ def photos(rpId: str = Query(min_length=1)) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.post("/debug/prompt", response_class=PlainTextResponse)
+def debug_prompt(req: EstimateRequest, _: None = Depends(require_secret)) -> str:
+    """The assembled prompt (template + injected input) the model would get — debug."""
+    try:
+        return preview_estimate_prompt(req)
+    except (ItemsFetchError, RpDataFetchError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _save_run(req: EstimateRequest, result: dict) -> None:
+    """Log the run for later comparison. Best-effort: never break the estimate."""
+    try:
+        save_run(
+            rp_id=req.rp_id,
+            model=req.model or get_settings().default_model,
+            reasoning_effort=req.reasoning_effort,
+            temperature=req.temperature,
+            label=req.label,
+            address=req.address,
+            prompt=get_base_prompt(get_settings().estimator_prompt_file),
+            response=result,
+        )
+    except Exception:
+        pass
+
+
 @app.post("/estimate")
 def estimate(req: EstimateRequest, _: None = Depends(require_secret)):
     try:
-        return build_full_estimate(req)
+        result = build_full_estimate(req)
     except NoPhotosError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
         # Upstream failed: megamind, calc.duo.tax, or the vision model.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _save_run(req, result)
+    return result
+
+
+@app.get("/runs")
+def runs(rpId: str | None = Query(default=None)) -> dict:
+    """Saved estimate runs (newest first). Omit rpId to list every property's runs."""
+    return {"runs": list_runs(rpId)}

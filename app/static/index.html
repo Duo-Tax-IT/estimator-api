@@ -162,11 +162,14 @@
       font-size: 14px; color: var(--text);
     }
     .summary .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+    #debugJson, #promptText { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word;
+                 font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
     table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
     th, td { text-align: left; padding: 12px 14px; font-size: 14px; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; background: var(--panel-2); }
     tbody tr:last-child td { border-bottom: none; }
+    tr.group td { background: var(--panel-2); font-weight: 600; font-size: 13px; }
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .none { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
 
@@ -186,6 +189,20 @@
     details.settings .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     details.settings .grid2 .setrow { margin-top: 0; min-width: 0; }
     @media (max-width: 620px) { details.settings .grid2 { grid-template-columns: 1fr; } }
+
+    nav.tabs { display: flex; gap: 6px; margin-bottom: 20px; }
+    .tab { padding: 8px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 14px; cursor: pointer; }
+    .tab.active { color: var(--text); border-color: var(--accent); }
+    .hist-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .hist-head h2 { font-size: 16px; margin: 0; }
+    #histFilter { padding: 8px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 14px; outline: none; }
+    #histFilter:focus { border-color: var(--accent); }
+    .hist-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel); }
+    .hist-item summary { cursor: pointer; font-size: 13px; }
+    .hist-item .meta { font-size: 13px; color: var(--text); line-height: 1.6; }
+    .hist-item summary .cmp { margin-right: 8px; }
+    tr.diff td { background: var(--panel-2); }
+    tr.diff td:first-child { border-left: 3px solid var(--accent); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -195,6 +212,12 @@
       <p>Search an address, pick the property, and we'll estimate detected renovations.</p>
     </header>
 
+    <nav class="tabs">
+      <button id="tabEstimate" class="tab active" type="button">Estimate</button>
+      <button id="tabHistory" class="tab" type="button">History</button>
+    </nav>
+
+    <div id="estimateView">
     <div class="search">
       <input id="q" type="text" placeholder="Search an address, e.g. 1 Fullarton Street" autocomplete="off" />
       <div id="searchSpin" class="search-spin" hidden></div>
@@ -230,12 +253,30 @@
         <span class="label">Renovations Total</span>
         <span id="total" class="amount">$0.00</span>
       </div>
+      <div id="ownerTotals" class="totalcard" hidden>
+        <span class="label">Previous Owner</span>
+        <span id="prevOwnerTotal" class="amount">$0.00</span>
+        <span class="label">Current Owner</span>
+        <span id="currOwnerTotal" class="amount">$0.00</span>
+      </div>
       <div id="summaryWrap" class="summary" hidden>
         <div class="label">Summary</div>
         <div id="summary"></div>
       </div>
+      <details id="debugWrap" class="summary" hidden>
+        <summary class="label" style="cursor:pointer">Property details (debug)</summary>
+        <pre id="debugJson"></pre>
+      </details>
+      <details id="promptWrap" class="summary" hidden>
+        <summary class="label" style="cursor:pointer">Prompt sent to AI (debug)</summary>
+        <pre id="promptText"></pre>
+      </details>
       <div id="tableWrap"></div>
       <div id="disclaimer" class="disclaimer"></div>
+      <details id="runsWrap" class="summary" hidden style="margin-top:16px">
+        <summary class="label" style="cursor:pointer">Saved runs (compare versions)</summary>
+        <div id="runsBody"></div>
+      </details>
     </section>
 
     <details class="settings">
@@ -243,13 +284,22 @@
 
       <div class="setrow">
         <label for="model">Model <span class="help">— blank uses the server default</span></label>
-        <input id="model" type="text" list="modelOptions" placeholder="e.g. gpt-5.4-mini" autocomplete="off" />
+        <input id="model" type="text" list="modelOptions" placeholder="e.g. gemini-3.5-flash" autocomplete="off" />
         <datalist id="modelOptions">
-          <option value="gpt-5.4-mini"></option>
-          <option value="gpt-5.4"></option>
-          <option value="gpt-4.1"></option>
-          <option value="gpt-4o"></option>
+          <option value="gemini-3.5-flash"></option>
+          <option value="gemini-2.5-flash"></option>
+          <option value="gemini-flash-latest"></option>
         </datalist>
+      </div>
+
+      <div class="setrow">
+        <label for="label">Version label <span class="help">— tags this run for comparison</span></label>
+        <input id="label" type="text" placeholder="e.g. v3 high effort" autocomplete="off" />
+      </div>
+
+      <div class="setrow">
+        <label for="settlementDate">Settlement date <span class="help">— dd/mm/yyyy; renovations before it are the previous owner's</span></label>
+        <input id="settlementDate" type="text" inputmode="numeric" placeholder="dd/mm/yyyy" maxlength="10" autocomplete="off" />
       </div>
 
       <div class="grid2" style="margin-top:14px;">
@@ -274,6 +324,21 @@
         <input id="apiKey" type="password" placeholder="secret-sauce header (only if the API requires one)" />
       </div>
     </details>
+    </div><!-- /estimateView -->
+
+    <section id="historyView" hidden>
+      <div class="hist-head">
+        <h2>Saved runs</h2>
+        <div style="display:flex; gap:8px;">
+          <input id="histFilter" type="text" placeholder="Filter by property id (blank = all)" style="min-width:240px;" />
+          <button id="histCompare" class="tab" type="button">Compare selected</button>
+          <label class="tab" style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="diffOnly" /> Differences only</label>
+          <button id="histRefresh" class="tab" type="button">Refresh</button>
+        </div>
+      </div>
+      <div id="compareBody"></div>
+      <div id="historyBody"></div>
+    </section>
   </div>
 
   <script>
@@ -283,9 +348,32 @@
 
     let debounce;
     let activeQuery = "";
+    let lastSelected = null;  // the picked suggestion, for the prompt-preview panel
 
     $("overrideToggle").addEventListener("change", (e) => {
       $("overrideFields").hidden = !e.target.checked;
+    });
+
+    // Live dd/mm/yyyy formatter: keep digits only, insert slashes, and expand a
+    // 2-digit year (>=50 -> 19xx, else 20xx) once day+month+yy are in.
+    const expandYear = (yy) => String(+yy >= 50 ? 1900 + +yy : 2000 + +yy);
+    function formatDateInput(value) {
+      const n = value.replace(/\D/g, "").slice(0, 8);
+      let out = n.slice(0, 2);
+      if (n.length >= 3) out += "/" + n.slice(2, 4);
+      if (n.length >= 5) out += "/" + (n.length === 6 ? expandYear(n.slice(4)) : n.slice(4));
+      return out;
+    }
+
+    // dd/mm/yyyy -> yyyy-mm-dd (what the backend's settlementDate expects);
+    // "" until a complete date is entered.
+    function settlementIso() {
+      const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec($("settlementDate").value.trim());
+      return m ? `${m[3]}-${m[2]}-${m[1]}` : "";
+    }
+
+    $("settlementDate").addEventListener("input", (e) => {
+      e.target.value = formatDateInput(e.target.value);
     });
 
     // Build the property override from the ticked fields. Only non-empty fields
@@ -301,6 +389,54 @@
       }
       return Object.keys(property).length ? property : null;
     }
+
+    // Shared by /estimate and /debug/prompt — the secret-sauce header is only
+    // sent when the API requires one.
+    function authHeaders() {
+      const headers = { "Content-Type": "application/json" };
+      const key = $("apiKey").value.trim();
+      if (key) headers["secret-sauce"] = key;
+      return headers;
+    }
+
+    // The EstimateRequest body for a picked suggestion, from the current form.
+    function buildBody(s) {
+      const body = { rpId: String(s.suggestionId) };
+      if (s.suggestion) body.address = s.suggestion;
+      const override = buildOverride();
+      if (override) body.property = override;
+      const model = $("model").value.trim();
+      if (model) body.model = model;
+      const effort = $("reasoningEffort").value;
+      if (effort) body.reasoningEffort = effort;
+      const temp = $("temperature").value.trim();
+      if (temp !== "") body.temperature = Number(temp);
+      const label = $("label").value.trim();
+      if (label) body.label = label;
+      const settlement = settlementIso();
+      if (settlement) body.settlementDate = settlement;
+      return body;
+    }
+
+    // Fetch the assembled prompt (template + injected input) for the selection.
+    // Lazy: runs when the panel is opened, so settings changes are reflected.
+    async function previewPrompt() {
+      if (!lastSelected) return;
+      const pre = $("promptText");
+      pre.textContent = "Loading…";
+      try {
+        const resp = await fetch("/debug/prompt", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(buildBody(lastSelected)),
+        });
+        const text = await resp.text();
+        pre.textContent = resp.ok ? text : `Error (${resp.status}): ${text}`;
+      } catch (e) {
+        pre.textContent = e.message;
+      }
+    }
+    $("promptWrap").addEventListener("toggle", (e) => { if (e.target.open) previewPrompt(); });
 
     function showStatus(msg) {
       statusEl.innerHTML = msg ? `<span class="spinner"></span><span>${msg}</span>` : "";
@@ -363,6 +499,7 @@
 
     async function selectSuggestion(s) {
       clearSuggestions();
+      lastSelected = s;
       qEl.value = s.suggestion;
       activeQuery = s.suggestion;
       resultEl.classList.remove("show");
@@ -373,29 +510,15 @@
       loadPhotos(s.suggestionId);
 
       try {
-        const headers = { "Content-Type": "application/json" };
-        const key = $("apiKey").value.trim();
-        if (key) headers["secret-sauce"] = key;
-
-        const body = { rpId: String(s.suggestionId) };
-        const override = buildOverride();
-        if (override) body.property = override;
-
-        const model = $("model").value.trim();
-        if (model) body.model = model;
-        const effort = $("reasoningEffort").value;
-        if (effort) body.reasoningEffort = effort;
-        const temp = $("temperature").value.trim();
-        if (temp !== "") body.temperature = Number(temp);
-
         const resp = await fetch("/estimate", {
           method: "POST",
-          headers,
-          body: JSON.stringify(body),
+          headers: authHeaders(),
+          body: JSON.stringify(buildBody(s)),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || `Estimate failed (${resp.status})`);
         renderResult(s, data);
+        loadRuns(s.suggestionId);  // refresh the saved-runs panel (incl. this run)
       } catch (e) {
         showError(e.message);
       } finally {
@@ -408,30 +531,56 @@
       $("selected").querySelector("strong").textContent = s.suggestion;
 
       $("total").textContent = data["Renovations Total"] || "$0.00";
+      const hasOwnerSplit = data["Previous Owner Total"] != null;
+      $("ownerTotals").hidden = !hasOwnerSplit;
+      if (hasOwnerSplit) {
+        $("prevOwnerTotal").textContent = data["Previous Owner Total"];
+        $("currOwnerTotal").textContent = data["Current Owner Total"];
+      }
 
       const summary = data["Summary Description"] || "";
       $("summary").textContent = summary;
       $("summaryWrap").hidden = !summary;
+
+      const debug = { Property: data.Property ?? null, GFA: data.GFA ?? null };
+      $("debugJson").textContent = JSON.stringify(debug, null, 2);
+      $("debugWrap").hidden = false;
+
+      // Collapse so the prompt re-fetches (with current settings) when re-opened.
+      $("promptWrap").open = false;
+      $("promptWrap").hidden = false;
 
       const renos = data["Renovations"] || [];
       const tableWrap = $("tableWrap");
       if (!renos.length) {
         tableWrap.innerHTML = `<div class="none">No depreciable renovations were detected from the property's photos.</div>`;
       } else {
-        const rows = renos.map((r) => `
+        const rowHtml = (r) => `
           <tr>
             <td>${escapeHtml(r.Name ?? "")}</td>
             <td>${escapeHtml(r.Year ?? "")}</td>
+            <td>${escapeHtml(r.Owner ?? "")}</td>
             <td class="num">${escapeHtml(String(r.Quantity ?? ""))}</td>
             <td>${escapeHtml(r.Unit ?? "")}</td>
             <td class="num">${escapeHtml(r.DefaultRate ?? "")}</td>
             <td class="num">${escapeHtml(r.FinalCost ?? "")}</td>
-          </tr>`).join("");
+          </tr>`;
+        // Group by parent label, first-seen order; items with no parent render flat.
+        const groups = [], at = {};
+        for (const r of renos) {
+          const key = r.parentName || "";
+          if (!(key in at)) { at[key] = groups.length; groups.push({ name: r.parentName, items: [] }); }
+          groups[at[key]].items.push(r);
+        }
+        const rows = groups.map((g) =>
+          (g.name ? `<tr class="group"><td colspan="7">${escapeHtml(g.name)}</td></tr>` : "") +
+          g.items.map(rowHtml).join("")
+        ).join("");
         tableWrap.innerHTML = `
           <table>
             <thead>
               <tr>
-                <th>Renovation</th><th>Year</th>
+                <th>Renovation</th><th>Year</th><th>Owner</th>
                 <th class="num">Qty</th><th>Unit</th>
                 <th class="num">Rate</th><th class="num">Cost</th>
               </tr>
@@ -443,6 +592,162 @@
       $("disclaimer").textContent = data["Disclaimer"] || "";
       resultEl.classList.add("show");
     }
+
+    // ---- Saved runs (version comparison) ----
+    async function loadRuns(rpId) {
+      try {
+        const resp = await fetch(`/runs?rpId=${encodeURIComponent(rpId)}`);
+        if (!resp.ok) return; // non-fatal
+        const { runs } = await resp.json();
+        renderRuns(runs || []);
+      } catch { /* non-fatal */ }
+    }
+
+    function runsTableHtml(runs) {
+      const rows = runs.map((r) => {
+        const resp = r.response || {};
+        const renos = resp.Renovations || [];
+        const names = renos.map((x) => x.Name).filter(Boolean).join(", ");
+        const settings = [r.reasoning_effort, r.temperature != null ? `temp ${r.temperature}` : ""]
+          .filter(Boolean).join(" · ");
+        const when = (r.created_at || "").replace("T", " ").slice(0, 16);
+        return `
+          <tr>
+            <td>${escapeHtml(when)}</td>
+            <td>${escapeHtml(r.label || "—")}</td>
+            <td>${escapeHtml(r.model || "")}</td>
+            <td>${escapeHtml(settings)}</td>
+            <td class="num">${escapeHtml(resp["Renovations Total"] || "")}</td>
+            <td>${renos.length}<div class="help">${escapeHtml(names)}</div></td>
+          </tr>`;
+      }).join("");
+      return `
+        <table>
+          <thead><tr>
+            <th>When</th><th>Label</th><th>Model</th><th>Settings</th>
+            <th class="num">Total</th><th>Items</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    function renderRuns(runs) {
+      if (!runs.length) { $("runsWrap").hidden = true; return; }
+      $("runsBody").innerHTML = runsTableHtml(runs);
+      $("runsWrap").hidden = false;
+    }
+
+    // ---- History view (all saved runs; filter by property id) ----
+    async function loadHistory() {
+      const rpId = $("histFilter").value.trim();
+      const url = rpId ? `/runs?rpId=${encodeURIComponent(rpId)}` : "/runs";
+      $("historyBody").innerHTML = `<div class="none">Loading…</div>`;
+      try {
+        const { runs } = await (await fetch(url)).json();
+        renderHistory(runs || []);
+      } catch {
+        $("historyBody").innerHTML = `<div class="none">Could not load runs.</div>`;
+      }
+    }
+
+    let historyRuns = [];
+    function renderHistory(runs) {
+      historyRuns = runs;
+      $("compareBody").innerHTML = "";
+      if (!runs.length) { $("historyBody").innerHTML = `<div class="none">No saved runs yet.</div>`; return; }
+      $("historyBody").innerHTML = runs.map((r) => {
+        const resp = r.response || {};
+        const renos = resp.Renovations || [];
+        const settings = [r.reasoning_effort, r.temperature != null ? `temp ${r.temperature}` : ""]
+          .filter(Boolean).join(" · ");
+        const when = (r.created_at || "").replace("T", " ").slice(0, 16);
+        const head = [when, r.address || `rp ${r.rp_id ?? ""}`, r.label || "—", r.model || "", settings, resp["Renovations Total"] || ""]
+          .filter(Boolean).map(escapeHtml).join(" · ");
+        const items = renos.map((x) =>
+          `${escapeHtml(x.Name ?? "")} <span class="help">(${escapeHtml(String(x.Year ?? ""))}, ` +
+          `${escapeHtml(String(x.Quantity ?? ""))} ${escapeHtml(x.Unit ?? "")}, ${escapeHtml(x.FinalCost ?? "")})</span>`
+        ).join("<br>");
+        return `
+          <details class="hist-item">
+            <summary><input type="checkbox" class="cmp" value="${r.id}" onclick="event.stopPropagation()" />${head} <span class="help">(${renos.length} items)</span> <button class="tab" onclick="event.stopPropagation(); openRun(${r.id})">Open</button></summary>
+            <div class="meta" style="margin-top:8px"><strong>Summary:</strong> ${escapeHtml(resp["Summary Description"] || "—")}</div>
+            <div class="meta" style="margin-top:8px">${items || "<span class='help'>No items</span>"}</div>
+          </details>`;
+      }).join("");
+    }
+
+    // Re-open a saved run in the Estimate view — no model call, photos re-fetched by rp_id.
+    function openRun(id) {
+      const run = historyRuns.find((r) => r.id === id);
+      if (!run) return;
+      showTab("estimate");
+      const s = { suggestion: run.address || `rp_id ${run.rp_id}`, suggestionId: run.rp_id };
+      lastSelected = s;
+      loadPhotos(run.rp_id);
+      renderResult(s, run.response || {});
+      loadRuns(run.rp_id);
+    }
+
+    // Tick 2+ runs → a matrix of items (rows) × runs (cols) with diffs highlighted.
+    function selectedRuns() {
+      const ids = [...document.querySelectorAll(".cmp:checked")].map((c) => Number(c.value));
+      return historyRuns.filter((r) => ids.includes(r.id));
+    }
+
+    let compareRuns = [];
+    function renderCompare(runs) { compareRuns = runs; drawCompare(); }
+
+    function drawCompare() {
+      const runs = compareRuns;
+      if (runs.length < 2) { $("compareBody").innerHTML = `<div class="none">Tick 2+ runs to compare.</div>`; return; }
+      const keys = [], seen = {};
+      const maps = runs.map((r) => {
+        const m = {};
+        ((r.response && r.response.Renovations) || []).forEach((it) => {
+          const k = it._id || it.Name;
+          m[k] = it;
+          if (!seen[k]) { seen[k] = true; keys.push(k); }
+        });
+        return m;
+      });
+      const diffOnly = $("diffOnly").checked;
+      const colHead = runs.map((r) =>
+        `<th class="num">${escapeHtml(r.label || (r.created_at || "").slice(5, 16))}</th>`).join("");
+      const totalRow = `<tr><td><strong>Total</strong></td>${runs.map((r) =>
+        `<td class="num"><strong>${escapeHtml(((r.response || {})["Renovations Total"]) || "")}</strong></td>`).join("")}</tr>`;
+      let diffs = 0;
+      const rows = keys.map((k) => {
+        const item = maps.find((m) => m[k])[k];
+        const costs = maps.map((m) => (m[k] ? (m[k].FinalCost ?? "") : null));
+        const same = costs.every((c) => c === costs[0]);
+        if (!same) diffs++;
+        if (diffOnly && same) return "";
+        const cells = maps.map((m) =>
+          `<td class="num">${m[k] ? escapeHtml(String(m[k].FinalCost ?? "")) : "—"}</td>`).join("");
+        return `<tr class="${same ? "" : "diff"}"><td>${escapeHtml(item.Name || k)}</td>${cells}</tr>`;
+      }).join("");
+      const note = `<div class="help" style="margin-bottom:8px">${diffs} of ${keys.length} items differ${diffOnly ? " · showing differences only" : ""}</div>`;
+      $("compareBody").innerHTML = note + `
+        <table style="margin-bottom:18px">
+          <thead><tr><th>Item</th>${colHead}</tr></thead>
+          <tbody>${totalRow}${rows}</tbody>
+        </table>`;
+    }
+    $("histCompare").addEventListener("click", () => renderCompare(selectedRuns()));
+    $("diffOnly").addEventListener("change", drawCompare);
+
+    function showTab(which) {
+      const hist = which === "history";
+      $("estimateView").hidden = hist;
+      $("historyView").hidden = !hist;
+      $("tabEstimate").classList.toggle("active", !hist);
+      $("tabHistory").classList.toggle("active", hist);
+      if (hist) loadHistory();
+    }
+    $("tabEstimate").addEventListener("click", () => showTab("estimate"));
+    $("tabHistory").addEventListener("click", () => showTab("history"));
+    $("histRefresh").addEventListener("click", loadHistory);
+    $("histFilter").addEventListener("change", loadHistory);
 
     // ---- Photo carousel ----
     let carouselPhotos = [], carouselIndex = 0;

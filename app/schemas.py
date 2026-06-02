@@ -33,5 +33,12 @@ class EstimateRequest(BaseModel):
         default=None, alias="reasoningEffort"
     )
     temperature: float | None = Field(default=None, ge=0, le=2)
+    # Free-text tag saved with the run, to mark what you're testing (e.g. "v3").
+    label: str | None = None
+    # Display address for the picked property, saved so a run can be re-opened.
+    address: str | None = None
+    # Settlement date (YYYY-MM-DD), e.g. from Salesforce Opportunity
+    # Settlement_Date__c. Renovations dated before it are the previous owner's.
+    settlement_date: str | None = Field(default=None, alias="settlementDate")
 
     model_config = {"populate_by_name": True}

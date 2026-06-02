@@ -1,12 +1,19 @@
+import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, runs_db
 from app.errors import ItemsFetchError, NoPhotosError, RpDataFetchError
 from app.main import app
 
 client = TestClient(app)
 
 VALID_BODY = {"rpId": "RP1"}
+
+
+@pytest.fixture(autouse=True)
+def _tmp_runs_db(tmp_path, monkeypatch):
+    # Keep run-logging off the real runs.db during tests.
+    monkeypatch.setattr(runs_db, "_DB", tmp_path / "runs.db")
 
 
 def test_health_ok():
@@ -85,6 +92,19 @@ def test_estimate_ignores_stray_fields(monkeypatch):
     assert client.post("/estimate", json=body).status_code == 200
 
 
+def test_estimate_saves_run_and_runs_endpoint_lists_it(monkeypatch):
+    monkeypatch.setattr(
+        main, "build_full_estimate",
+        lambda req: {"Renovations": [], "Renovations Total": "$0.00"},
+    )
+    assert client.post("/estimate", json={"rpId": "RP9", "label": "v1"}).status_code == 200
+
+    runs = client.get("/runs", params={"rpId": "RP9"}).json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["label"] == "v1"
+    assert runs[0]["response"]["Renovations Total"] == "$0.00"
+
+
 def test_estimate_no_photos_maps_to_422(monkeypatch):
     def boom(req):
         raise NoPhotosError("No usable photos found for rp_id RP1")
@@ -109,6 +129,21 @@ def test_estimate_photos_error_maps_to_502(monkeypatch):
 
     monkeypatch.setattr(main, "build_full_estimate", boom)
     assert client.post("/estimate", json=VALID_BODY).status_code == 502
+
+
+def test_debug_prompt_returns_text(monkeypatch):
+    monkeypatch.setattr(main, "preview_estimate_prompt", lambda req: "X")
+    r = client.post("/debug/prompt", json=VALID_BODY)
+    assert r.status_code == 200
+    assert r.text == "X"
+
+
+def test_debug_prompt_upstream_error_maps_to_502(monkeypatch):
+    def boom(req):
+        raise RpDataFetchError("calc.duo.tax unreachable")
+
+    monkeypatch.setattr(main, "preview_estimate_prompt", boom)
+    assert client.post("/debug/prompt", json=VALID_BODY).status_code == 502
 
 
 def test_auth_enforced_when_api_key_set(monkeypatch):

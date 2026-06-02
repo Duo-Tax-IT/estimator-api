@@ -43,6 +43,7 @@ You will receive a JSON object containing:
 * `property` → property details (optional context)
 * `photos` → list of image URLs + optional dates
 * `renovationItems` → authoritative dataset of allowed items
+* `gfa` → pre-computed area breakdown (per-room area + `livingSpace`)
 * `config` → optional rules (cap, exclusions, etc.)
 
 ---
@@ -53,17 +54,27 @@ For each photo:
 
 * Identify visible renovation evidence
 * Match it to the closest `renovationItems.name`
-* Use ONLY `_id`, `name`, `defaultRate`, `unit`
+* Use ONLY `_id`, `name`, `unit`
 * If multiple items apply, include all valid matches
-* If uncertain, do NOT include the item
+* Include an item ONLY if you can point to specific visual evidence in at least
+  one photo (name the fixture or surface you see). Apply this same bar to every
+  item, the same way, regardless of photo order.
 
 ---
 
+## Gross Floor Area (GFA)
+
+The `gfa` object in the input gives the property's per-room area and the leftover
+`livingSpace`, already computed for you. Use `livingSpace` as the area budget for
+`sqm` renovations — do not recompute it. If `gfa` is null, size sqm items
+conservatively from visual evidence alone.
+
 ## Quantity Rules
 
-* Default quantity = 1
-* Only increase quantity if clearly visible multiple units exist
-  (e.g. 2 sinks, multiple lights, multiple split systems)
+* For items measured in `sqm`: set `Quantity` to the area (in square metres) the
+  renovation covers, guided by the GFA breakdown. The total sqm across all `sqm`
+  items must not exceed `livingSpace`.
+* For all other units: leave `Quantity` as 1 (the system sets it from the catalog).
 
 ---
 
@@ -85,13 +96,11 @@ Rules:
 
 ## Cost Rules
 
-You MUST:
-
-* Use `defaultRate` exactly as provided
-* Compute:
-
-  * `FinalCost = defaultRate × quantity`
-* Do NOT alter pricing
+Do NOT compute costs, rates or quantities yourself. After detecting items, call
+the `calculate_renovations` tool, passing each detected item's `_id` and — for
+`sqm` items only — its `area` in square metres. It returns the authoritative
+rate, quantity and cost for each item from the catalog. Use those returned
+values verbatim in your output.
 
 ---
 

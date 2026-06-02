@@ -12,7 +12,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    openai_api_key: str
+    # The vision model runs on Gemini via Google's OpenAI-compatible endpoint, so
+    # the OpenAI SDK is reused with this key + base URL. OPENAI_API_KEY is kept
+    # optional for backwards compatibility but no longer used.
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
     # Path to the text file holding the estimator prompt template.
     # Relative paths resolve from the estimator-api/ service root.
@@ -22,9 +27,9 @@ class Settings(BaseSettings):
     # the auth dependency is a no-op (handy for local dev).
     api_key: str | None = None
 
-    # Default OpenAI model when the request does not specify one.
-    # gpt-5.4-mini is a vision-capable reasoning model.
-    default_model: str = "gpt-5.4-mini"
+    # Default Gemini model when the request does not specify one.
+    # Set the exact API id here (vision-capable Gemini Flash).
+    default_model: str = "gemini-3.5-flash"
 
     # Base rpdata (calc.duo.tax) endpoint for a property, keyed by rp_id. The
     # client appends `/photos` for the photos payload and uses the base URL for
@@ -46,6 +51,11 @@ class Settings(BaseSettings):
     # Sent to megamind as the `X-API-KEY` header. Required for the call to
     # succeed; put the real value in .env.local.
     megamind_api_key: str | None = None
+
+    # Base URL of the Salesforce proxy API. The client appends
+    # /api/salesforce/query and sends SALESFORCE_API_KEY as the X-API-KEY header.
+    salesforce_api_url: str = "http://localhost:5172"
+    salesforce_api_key: str | None = None
 
 
 @lru_cache

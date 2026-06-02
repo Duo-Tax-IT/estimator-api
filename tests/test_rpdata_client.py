@@ -5,10 +5,25 @@ from app import rpdata_client
 from app.errors import RpDataFetchError
 from app.rpdata_client import (
     _map_photos,
+    extract_state,
     fetch_photos,
     fetch_property,
     search_addresses,
 )
+
+
+def test_extract_state_prefers_token_before_postcode():
+    assert extract_state("1 Fullarton Street, NORWOOD SA 5067") == "SA"
+    assert extract_state("123 St Georges Tce, PERTH WA 6000") == "WA"
+
+
+def test_extract_state_falls_back_to_last_token_without_postcode():
+    assert extract_state("Some Road, DARWIN NT") == "NT"
+
+
+def test_extract_state_none_when_absent_or_empty():
+    assert extract_state("1 Fullarton Street") is None
+    assert extract_state(None) is None
 
 
 def _img(url, date="2024-01-01", **extra):

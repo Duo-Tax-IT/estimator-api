@@ -1,8 +1,13 @@
+import re
+
 import httpx
 
 from .config import get_settings
 from .errors import RpDataFetchError
 from .schemas import Photo
+
+# AU state abbreviations, for pulling the state out of a display address.
+_STATE = r"NSW|QLD|VIC|WA|SA|ACT|TAS|NT"
 
 # Preference order for the URL we feed the vision model.
 _URL_FIELDS = ("largePhotoUrl", "mediumPhotoUrl", "basePhotoUrl")
@@ -52,6 +57,21 @@ def _get_json(url: str, rp_id: str, what: str):
         raise RpDataFetchError(
             f"RP Data API returned non-JSON {what} for rp_id {rp_id}"
         ) from exc
+
+
+def extract_state(address: str | None) -> str | None:
+    """The AU state abbreviation from a display address, or None.
+
+    Prefers the state token right before a 4-digit postcode (the usual
+    '… SUBURB SA 5067' form); else falls back to the last state token found.
+    """
+    if not address:
+        return None
+    anchored = re.search(rf"\b({_STATE})\b\s+\d{{4}}\b", address, re.IGNORECASE)
+    if anchored:
+        return anchored.group(1).upper()
+    tokens = re.findall(rf"\b({_STATE})\b", address, re.IGNORECASE)
+    return tokens[-1].upper() if tokens else None
 
 
 def search_addresses(query: str) -> list[dict]:

@@ -10,6 +10,14 @@ class ItemsFetchError(EstimatorError):
     """The items API (megamind) was unreachable or returned a bad response."""
 
 
+class BciFetchError(EstimatorError):
+    """The AIQS BCI API (megamind) was unreachable or returned a bad response."""
+
+
+class SalesforceFetchError(EstimatorError):
+    """The Salesforce proxy API was unreachable or returned a bad response."""
+
+
 class NoPhotosError(EstimatorError):
     """No usable photos were found for the given rp_id."""
 
