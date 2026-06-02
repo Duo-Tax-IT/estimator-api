@@ -23,9 +23,9 @@ and rejects weak candidates with explicit reasons.
 
 - No change to `/estimate`, `estimator.py`, `openai_client.generate_estimate`,
   or `estimator_prompt.txt`. They are left byte-for-byte as-is.
-- No frontend changes. v2 returns the **same response shape** as `/estimate`
-  (plus an extra `Stages` key the frontend ignores).
 - No provider/model swap. Same Gemini-via-OpenAI client and `req.model` override.
+- v2 returns the **same response shape** as `/estimate` (plus an extra `Stages`
+  key), so the existing result rendering is reused unchanged.
 
 ## Pipeline (2 model calls)
 
@@ -113,6 +113,33 @@ Identical to `/estimate`:
 (it's part of the returned dict). The frontend ignores unknown keys, so the
 backend/frontend contract is unchanged.
 
+## Frontend (`app/static/index.html`)
+
+**Decouple "pick property" from "run", add one button per pipeline.** Today
+`selectSuggestion(s)` (index.html:500) immediately POSTs to `/estimate`. That
+auto-run is removed.
+
+- `selectSuggestion(s)` now only *selects*: clears suggestions, sets
+  `lastSelected`, fills the search box, loads photos, shows a "Selected: …"
+  line, clears any prior result/error, and **enables the run buttons**. No model
+  call.
+- New `runEstimate(version)` does what `selectSuggestion` used to: shows
+  "Thinking…", POSTs `buildBody(lastSelected)` to `/estimate` (v1) or
+  `/estimate/v2` (v2), renders the result, refreshes saved runs. `version` only
+  chooses the endpoint; the request body is identical.
+- Two buttons **Run v1** / **Run v2**, disabled until a property is selected.
+  Placed after the override card. The result banner notes which version ran.
+- Override fields: drop the "set them before picking an address" hint — they can
+  now be edited after picking, before running. The `property` override already
+  flows through `buildBody` unchanged.
+- New collapsed `<details>` "Pipeline stages (debug)" panel, shown only when
+  `data.Stages` is present (v2), rendering `Stages` as pretty JSON — mirrors the
+  existing Property/Prompt debug panels. `renderResult` hides it when absent so
+  v1 results are unaffected.
+
+No change to the backend/response contract: v2 reuses the same `renderResult`
+path; `Stages` is the only addition and is read only by the new panel.
+
 ## Error handling
 
 Same error taxonomy as `/estimate`:
@@ -137,5 +164,7 @@ attributable.
 
 ## Rollback
 
-Stop calling `/estimate/v2`. No existing code path is modified, so the original
-pipeline is unaffected.
+The backend pipeline is fully isolated — stop calling `/estimate/v2` and the
+original pipeline is unaffected. The frontend change (run buttons) is shared:
+the **Run v1** button preserves the original behavior, so v1 remains one click
+away even if v2 is abandoned.
