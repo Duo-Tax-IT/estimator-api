@@ -57,7 +57,7 @@ def test_build_full_estimate_formats_and_reshapes(monkeypatch):
 
     def fake_generate(model, prompt, model_input, photos, **kwargs):
         captured.update(model=model, model_input=model_input, photos=photos)
-        return _model_json()
+        return _model_json(), {}
 
     monkeypatch.setattr(estimator, "generate_estimate", fake_generate)
 
@@ -107,7 +107,7 @@ def test_sqm_items_use_model_quantity_and_cap_to_living_space(monkeypatch):
         ],
         "Summary Description": "", "Guarantee": "",
     })
-    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: model_out)
+    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: (model_out, {}))
 
     out = estimator.build_full_estimate(_req())
     # 40 + 20 = 60 sqm > 48 living space → scale by 48/60 = 0.8.
@@ -128,7 +128,7 @@ def test_build_full_estimate_applies_bci_factor(monkeypatch):
         return 0.5
 
     monkeypatch.setattr(estimator, "fetch_bci_factor", fake_factor)
-    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: _model_json())
+    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: (_model_json(), {}))
 
     out = estimator.build_full_estimate(_req(address="1 King St, SYDNEY NSW 2000"))
     # 2 × $1,200 × 0.5 = $1,200; state from the address, year (2018) dated to 1 Jul.
@@ -148,11 +148,108 @@ def test_name_comes_from_library_not_model(monkeypatch):
                          "DefaultRate": 200, "Year": "2018"}],
         "Summary Description": "", "Guarantee": "",
     })
-    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: model_out)
+    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: (model_out, {}))
 
     out = estimator.build_full_estimate(_req())
     assert out["Renovations"][0]["Name"] == "Driveway"
     assert out["Renovations"][0]["parentName"] == "Outdoor"
+
+
+def test_filter_catalog_keeps_kitchen_variant_for_property_type():
+    # Two kitchen variants; House one has a nested child subtree.
+    items = [
+        {"_id": "kh", "name": "Kitchen - House", "parentId": None},
+        {"_id": "khj", "name": "Joinery", "parentId": "kh"},
+        {"_id": "khjc", "name": "Benchtop", "parentId": "khj"},
+        {"_id": "ka", "name": "Kitchen - Apartment", "parentId": None},
+        {"_id": "kac", "name": "Sink", "parentId": "ka"},
+        {"_id": "g", "name": "Driveway", "parentId": None},
+    ]
+    unit = {i["_id"] for i in estimator.filter_catalog_for_property(items, {"propertyType": "UNIT"})}
+    # House kitchen + its whole nested subtree gone; apartment + generic kept.
+    assert unit == {"ka", "kac", "g"}
+
+    house = {i["_id"] for i in estimator.filter_catalog_for_property(items, {"propertyType": "HOUSE"})}
+    assert house == {"kh", "khj", "khjc", "g"}
+
+    # Unknown/commercial → keep both, don't guess.
+    both = estimator.filter_catalog_for_property(items, {"propertyType": "COMMERCIAL"})
+    assert both == items
+    assert estimator.filter_catalog_for_property(items, {}) == items
+
+
+def test_apply_room_counts_scales_room_groups_only_when_enabled():
+    renos = [
+        {"Name": "Toilet", "FinalCost": 1000, "groupPath": ["Bathroom"]},
+        {"Name": "Wall tiling", "FinalCost": 2000, "groupPath": ["Bathroom", "Wet"]},
+        {"Name": "Built-in Wardrobes", "FinalCost": 500, "groupPath": []},
+        {"Name": "Driveway", "FinalCost": 300, "groupPath": []},
+    ]
+    prop = {"baths": "2", "beds": "3"}
+
+    off = estimator.apply_room_counts([dict(r) for r in renos], prop, {})
+    assert off == 1000 + 2000 + 500 + 300  # flag off → nothing scaled
+
+    rows = [dict(r) for r in renos]
+    on = estimator.apply_room_counts(rows, prop, {"assumeAllRoomsRenovated": True})
+    # Bathroom subtree ×2 baths (incl. nested), wardrobes ×3 beds, driveway ×1.
+    assert on == (1000 + 2000) * 2 + 500 * 3 + 300
+    assert {r["Name"]: r["Count"] for r in rows} == {
+        "Toilet": 2, "Wall tiling": 2, "Built-in Wardrobes": 3, "Driveway": 1,
+    }
+    assert rows[0]["CountOf"] == "bathroom"
+
+
+def test_apply_room_counts_manual_scale_overrides():
+    renos = [
+        {"Name": "Toilet", "FinalCost": 1000, "groupPath": ["Bathroom"]},
+        {"Name": "Sink", "FinalCost": 500, "groupPath": ["Kitchen - Apartment"]},
+        {"Name": "Driveway", "FinalCost": 300, "groupPath": []},
+    ]
+    # Manual multipliers scale by the given number, no property data needed.
+    total = estimator.apply_room_counts(renos, {}, {"roomScale": {"bathroom": 3, "kitchen": 2}})
+    assert total == 1000 * 3 + 500 * 2 + 300
+    assert renos[0]["Count"] == 3 and renos[0]["CountOf"] == "bathroom"
+    assert renos[1]["Count"] == 2 and renos[1]["CountOf"] == "kitchen"
+    assert renos[2]["Count"] == 1  # not a room group → unscaled
+
+
+def test_split_by_owner_honours_count():
+    renos = [{"Year": "2021", "FinalCost": 1000, "Count": 2}]
+    totals = estimator.split_by_owner(renos, "2020-01-01")  # 2021 ≥ 2020 → current
+    assert totals["Current Owner"] == 2000
+
+
+def test_full_room_match_expands_parent_to_leaf_children(monkeypatch):
+    # Nested catalog: Room(0) -> [ItemA(100), Sub(0) -> ItemB(200)].
+    items = [
+        {"_id": "p", "name": "Room", "defaultRate": 0, "unit": "item",
+         "defaultQuantity": 1, "parentId": None, "parentName": None},
+        {"_id": "a", "name": "ItemA", "defaultRate": 100, "unit": "item",
+         "defaultQuantity": 1, "parentId": "p", "parentName": "Room"},
+        {"_id": "s", "name": "Sub", "defaultRate": 0, "unit": "item",
+         "defaultQuantity": 1, "parentId": "p", "parentName": "Room"},
+        {"_id": "b", "name": "ItemB", "defaultRate": 200, "unit": "item",
+         "defaultQuantity": 1, "parentId": "s", "parentName": "Sub"},
+    ]
+    _patch_upstreams(monkeypatch, items=items)
+    # The model matches the 0-rate parent (its whole-room signal) and a child.
+    model_out = json.dumps({
+        "Renovations": [
+            {"_id": "p", "Name": "Room", "Unit": "item", "DefaultRate": 0, "Year": "2021"},
+            {"_id": "a", "Name": "ItemA", "Unit": "item", "DefaultRate": 100, "Year": "2021"},
+        ],
+        "Summary Description": "", "Guarantee": "",
+    })
+    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: (model_out, {}))
+
+    out = estimator.build_full_estimate(_req())
+    names = [r["Name"] for r in out["Renovations"]]
+    # Parent expands to its leaves (recursing through Sub); ItemA isn't doubled.
+    assert sorted(names) == ["ItemA", "ItemB"]
+    assert names.count("ItemA") == 1
+    assert out["Renovations Total"] == "$300.00"
+    assert all(r["Year"] == "2021" for r in out["Renovations"])
 
 
 def test_build_full_estimate_property_override(monkeypatch):
@@ -161,7 +258,7 @@ def test_build_full_estimate_property_override(monkeypatch):
 
     def fake_generate(model, prompt, model_input, photos, **kwargs):
         captured.update(model_input=model_input)
-        return _model_json(Renovations=[], Totals={"TotalRenovation": 0})
+        return _model_json(Renovations=[], Totals={"TotalRenovation": 0}), {}
 
     monkeypatch.setattr(estimator, "generate_estimate", fake_generate)
     # fetch_property would raise if called; a caller override must short-circuit it
@@ -199,7 +296,7 @@ def test_build_full_estimate_no_photos_raises(monkeypatch):
 
 def test_build_full_estimate_bad_model_json_raises(monkeypatch):
     _patch_upstreams(monkeypatch)
-    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: "not json")
+    monkeypatch.setattr(estimator, "generate_estimate", lambda *a, **k: ("not json", {}))
     with pytest.raises(ModelError):
         estimator.build_full_estimate(_req())
 
@@ -210,7 +307,7 @@ def test_build_full_estimate_uses_model_override(monkeypatch):
 
     def fake_generate(model, prompt, model_input, photos, **kwargs):
         seen["model"] = model
-        return _model_json(Renovations=[], Totals={"TotalRenovation": 0})
+        return _model_json(Renovations=[], Totals={"TotalRenovation": 0}), {}
 
     monkeypatch.setattr(estimator, "generate_estimate", fake_generate)
     estimator.build_full_estimate(_req(model="gpt-4o"))

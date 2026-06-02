@@ -1,9 +1,23 @@
+import pytest
+
 from app import openai_client
+from app.errors import ModelError
 from app.schemas import Photo
 
 
 def _message(content="", tool_calls=None):
     return type("M", (), {"content": content, "tool_calls": tool_calls})()
+
+
+def _resp(content, finish_reason="stop"):
+    choice = type("C", (), {"message": _message(content), "finish_reason": finish_reason})()
+    return type("R", (), {"choices": [choice], "usage": None})()
+
+
+def _patch_chat(monkeypatch, resp):
+    comp = type("Comp", (), {"create": lambda self, **kw: resp})()
+    client = type("Cl", (), {"chat": type("Ch", (), {"completions": comp})()})()
+    monkeypatch.setattr(openai_client, "_client", lambda: client)
 
 
 class _FakeCompletions:
@@ -27,7 +41,7 @@ def _patch(monkeypatch, sink, message=None):
 def test_reasoning_model_uses_reasoning_effort_no_temperature(monkeypatch):
     sink = {}
     _patch(monkeypatch, sink)
-    out = openai_client.generate_estimate(
+    out, _ = openai_client.generate_estimate(
         "gpt-5.4-mini", "prompt", {"x": 1},
         [Photo(url="https://x/a", date="2024-01-01")], library={},
     )
@@ -108,7 +122,7 @@ def test_runs_tool_call_then_returns_final(monkeypatch):
     monkeypatch.setattr(openai_client, "_client", lambda: client)
     monkeypatch.setattr(openai_client, "_image_data_url", lambda url: "data:image/jpeg;base64,AAA")
 
-    out = openai_client.generate_estimate(
+    out, _ = openai_client.generate_estimate(
         "gpt-4.1", "prompt", {"x": 1}, [Photo(url="https://x/a")], library={}
     )
     assert out == '{"done": true}'
@@ -142,7 +156,7 @@ def test_calculate_renovations_tool_prices_from_catalog(monkeypatch):
 
     library = {"a1": {"_id": "a1", "name": "AC", "defaultRate": 1000, "unit": "each",
                       "defaultQuantity": 2, "parentName": None}}
-    out = openai_client.generate_estimate(
+    out, _ = openai_client.generate_estimate(
         "gpt-4.1", "prompt", {"x": 1}, [Photo(url="https://x/a")], library=library
     )
     assert out == '{"done": true}'
@@ -152,6 +166,25 @@ def test_calculate_renovations_tool_prices_from_catalog(monkeypatch):
     result = json.loads(tool_msg["content"])
     assert result["total"] == 2000
     assert result["renovations"][0]["DefaultRate"] == 1000
+
+
+def test_extract_json_strips_fences_and_prose():
+    assert openai_client._extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert openai_client._extract_json('Here you go: {"a": 1} cheers') == '{"a": 1}'
+    # First '{' / last '}' are the true bounds even when a string holds a brace.
+    assert openai_client._extract_json('{"a": "}"}') == '{"a": "}"}'
+
+
+def test_chat_json_unwraps_fenced_output(monkeypatch):
+    _patch_chat(monkeypatch, _resp('```json\n{"ok": true}\n```'))
+    text, _ = openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
+    assert text == '{"ok": true}'
+
+
+def test_chat_json_raises_clear_error_on_truncation(monkeypatch):
+    _patch_chat(monkeypatch, _resp('{"photoObservations": [', finish_reason="length"))
+    with pytest.raises(ModelError, match="cut off"):
+        openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
 
 
 def test_build_input_text():

@@ -84,6 +84,7 @@ def _map_items(items: list[dict]) -> list[dict]:
                 "defaultRate": rate,
                 "unit": item.get("unit"),
                 "defaultQuantity": item.get("defaultQuantity"),
+                "parentId": item.get("parentId"),
                 "parentName": names.get(item.get("parentId")),
             }
         )

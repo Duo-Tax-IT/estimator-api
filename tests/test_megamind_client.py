@@ -41,7 +41,7 @@ def test_map_items_maps_id_to_underscore_id_and_keeps_core_fields():
     # defaultQuantity is carried through (None when absent); parentName too.
     assert _map_items([_item(defaultQuantity=3)]) == [
         {"_id": "i1", "name": "Driveway", "defaultRate": 200, "unit": "sqm",
-         "defaultQuantity": 3, "parentName": None}
+         "defaultQuantity": 3, "parentId": None, "parentName": None}
     ]
     assert _map_items([_item()])[0]["defaultQuantity"] is None
 

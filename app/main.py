@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from .config import get_settings
 from .errors import ItemsFetchError, ModelError, NoPhotosError, RpDataFetchError
 from .estimator import build_full_estimate, preview_estimate_prompt
+from .estimator_v2 import build_estimate_v2, preview_estimate_prompt_v2
 from .prompts import get_base_prompt
 from .rpdata_client import fetch_photos, search_addresses
 from .runs_db import list_runs, save_run
@@ -76,6 +77,15 @@ def debug_prompt(req: EstimateRequest, _: None = Depends(require_secret)) -> str
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.post("/debug/prompt/v2", response_class=PlainTextResponse)
+def debug_prompt_v2(req: EstimateRequest, _: None = Depends(require_secret)) -> str:
+    """The v2 pipeline's two prompts (observe + candidate-match) — debug."""
+    try:
+        return preview_estimate_prompt_v2(req)
+    except (ItemsFetchError, RpDataFetchError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 def _save_run(req: EstimateRequest, result: dict) -> None:
     """Log the run for later comparison. Best-effort: never break the estimate."""
     try:
@@ -93,10 +103,10 @@ def _save_run(req: EstimateRequest, result: dict) -> None:
         pass
 
 
-@app.post("/estimate")
-def estimate(req: EstimateRequest, _: None = Depends(require_secret)):
+def _run_estimate(builder, req: EstimateRequest) -> dict:
+    """Run an estimate builder, map upstream failures to HTTP, and save the run."""
     try:
-        result = build_full_estimate(req)
+        result = builder(req)
     except NoPhotosError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
@@ -104,6 +114,18 @@ def estimate(req: EstimateRequest, _: None = Depends(require_secret)):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     _save_run(req, result)
     return result
+
+
+@app.post("/estimate")
+def estimate(req: EstimateRequest, _: None = Depends(require_secret)):
+    return _run_estimate(build_full_estimate, req)
+
+
+@app.post("/estimate/v2")
+def estimate_v2(req: EstimateRequest, _: None = Depends(require_secret)):
+    """The multi-step (observe -> match -> price) pipeline. Same response shape
+    as /estimate, plus a `Stages` debug key."""
+    return _run_estimate(build_estimate_v2, req)
 
 
 @app.get("/runs")

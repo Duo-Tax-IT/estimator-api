@@ -84,3 +84,19 @@ def test_factor_defaults_to_one():
     out = price_items([{"_id": "each1"}], LIBRARY)
     assert out["renovations"][0]["Factor"] == 1.0
     assert out["renovations"][0]["FinalCost"] == 2400
+
+
+def test_group_path_is_full_ancestry_for_nesting():
+    # Kitchen - House › Joinery › Benchtop (grandchild).
+    library = {
+        "k": {"_id": "k", "name": "Kitchen - House", "defaultRate": 0, "unit": "item",
+              "defaultQuantity": 1, "parentId": None, "parentName": None},
+        "j": {"_id": "j", "name": "Joinery", "defaultRate": 0, "unit": "item",
+              "defaultQuantity": 1, "parentId": "k", "parentName": "Kitchen - House"},
+        "b": {"_id": "b", "name": "Benchtop", "defaultRate": 3000, "unit": "item",
+              "defaultQuantity": 1, "parentId": "j", "parentName": "Joinery"},
+    }
+    out = price_items([{"_id": "b"}], library)
+    assert out["renovations"][0]["groupPath"] == ["Kitchen - House", "Joinery"]
+    # A top-level item has an empty ancestry.
+    assert price_items([{"_id": "each1"}], LIBRARY)["renovations"][0]["groupPath"] == []

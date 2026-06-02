@@ -104,6 +104,17 @@
     .override .field input:focus { border-color: var(--accent); }
     @media (max-width: 620px) { .override .fields { grid-template-columns: repeat(2, 1fr); } }
 
+    .picked { margin-top: 18px; font-size: 14px; color: var(--muted); }
+    .picked strong { color: var(--text); }
+    .runrow { display: flex; gap: 10px; margin-top: 12px; }
+    .runbtn {
+      padding: 11px 22px; font-size: 14px; font-weight: 600; color: #fff;
+      background: var(--accent); border: 1px solid var(--accent);
+      border-radius: 10px; cursor: pointer; transition: opacity .15s;
+    }
+    .runbtn:hover { opacity: .9; }
+    .runbtn:disabled { opacity: .4; cursor: not-allowed; }
+
     .status { margin-top: 24px; font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
     .spinner {
       width: 16px; height: 16px; border-radius: 50%;
@@ -156,6 +167,21 @@
     .totalcard .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
     .totalcard .amount { font-size: 30px; font-weight: 650; color: var(--good); letter-spacing: -0.02em; }
 
+    .roomscale {
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 18px; margin-bottom: 20px;
+    }
+    .roomscale .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .roomscale label { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; color: var(--text); }
+    .roomscale input {
+      width: 60px; padding: 6px 8px; background: var(--panel-2);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-size: 14px; outline: none;
+    }
+    .roomscale input:focus { border-color: var(--accent); }
+    .roomscale .help { font-size: 12px; color: var(--muted); margin-left: auto; }
+
     .summary {
       background: var(--panel); border: 1px solid var(--border);
       border-radius: 14px; padding: 16px 18px; margin-bottom: 20px;
@@ -170,6 +196,9 @@
     th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; background: var(--panel-2); }
     tbody tr:last-child td { border-bottom: none; }
     tr.group td { background: var(--panel-2); font-weight: 600; font-size: 13px; }
+    tr.group { cursor: pointer; }
+    tr.group td.gname::before { content: "▾"; display: inline-block; width: 1.3em; color: var(--muted); }
+    tr.group.collapsed td.gname::before { content: "▸"; }
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .none { padding: 22px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
 
@@ -203,6 +232,21 @@
     .hist-item summary .cmp { margin-right: 8px; }
     tr.diff td { background: var(--panel-2); }
     tr.diff td:first-child { border-left: 3px solid var(--accent); font-weight: 600; }
+
+    .modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start;
+             justify-content: center; padding: 40px 16px; background: rgba(0,0,0,.6); overflow-y: auto; }
+    .modal[hidden] { display: none; }
+    .modal-card { width: 100%; max-width: 720px; background: var(--bg); border: 1px solid var(--border);
+                  border-radius: 16px; padding: 24px 24px 28px; position: relative; }
+    .modal-card h3 { margin: 0 0 18px; font-size: 18px; letter-spacing: -0.01em; }
+    .modal-close { position: absolute; top: 16px; right: 16px; padding: 6px 12px; font-size: 13px;
+                   color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+                   border-radius: 8px; cursor: pointer; }
+    .modal-card pre { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0;
+                      font-size: 12px; color: var(--muted); }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin-bottom: 18px; font-size: 14px; }
+    .kv .k { color: var(--muted); }
+    .kv .v { color: var(--text); font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -227,7 +271,7 @@
     <div class="override">
       <label class="toggle">
         <input type="checkbox" id="overrideToggle" />
-        <span>Override property details <span class="sub">— use these instead of rpdata's, set them before picking an address</span></span>
+        <span>Override property details <span class="sub">— use these instead of rpdata's; edit after picking, before running</span></span>
       </label>
       <div id="overrideFields" class="fields" hidden>
         <div class="field"><label>Bedrooms</label><input id="ovBeds" type="number" min="0" inputmode="numeric" placeholder="—" /></div>
@@ -235,6 +279,12 @@
         <div class="field"><label>Car Spaces</label><input id="ovCarSpaces" type="number" min="0" inputmode="numeric" placeholder="—" /></div>
         <div class="field"><label>Year Built</label><input id="ovYearBuilt" type="number" inputmode="numeric" placeholder="—" /></div>
       </div>
+    </div>
+
+    <div id="picked" class="picked" hidden></div>
+    <div class="runrow">
+      <button id="runV1" class="runbtn" type="button" disabled>Run v1</button>
+      <button id="runV2" class="runbtn" type="button" disabled>Run v2</button>
     </div>
 
     <div id="status" class="status" hidden></div>
@@ -259,6 +309,12 @@
         <span class="label">Current Owner</span>
         <span id="currOwnerTotal" class="amount">$0.00</span>
       </div>
+      <div class="roomscale">
+        <span class="label">Room scaling</span>
+        <label>Bathroom ×<input id="scaleBathroom" type="number" min="0" step="1" placeholder="1" /></label>
+        <label>Kitchen ×<input id="scaleKitchen" type="number" min="0" step="1" placeholder="1" /></label>
+        <span class="help">updates the totals instantly</span>
+      </div>
       <div id="summaryWrap" class="summary" hidden>
         <div class="label">Summary</div>
         <div id="summary"></div>
@@ -270,6 +326,10 @@
       <details id="promptWrap" class="summary" hidden>
         <summary class="label" style="cursor:pointer">Prompt sent to AI (debug)</summary>
         <pre id="promptText"></pre>
+      </details>
+      <details id="stagesWrap" class="summary" hidden>
+        <summary class="label" style="cursor:pointer">Pipeline stages (debug)</summary>
+        <pre id="stagesJson"></pre>
       </details>
       <div id="tableWrap"></div>
       <div id="disclaimer" class="disclaimer"></div>
@@ -296,6 +356,7 @@
         <label for="label">Version label <span class="help">— tags this run for comparison</span></label>
         <input id="label" type="text" placeholder="e.g. v3 high effort" autocomplete="off" />
       </div>
+
 
       <div class="setrow">
         <label for="settlementDate">Settlement date <span class="help">— dd/mm/yyyy; renovations before it are the previous owner's</span></label>
@@ -341,6 +402,13 @@
     </section>
   </div>
 
+  <div id="runModal" class="modal" hidden>
+    <div class="modal-card">
+      <button id="runModalClose" class="modal-close" type="button">Close</button>
+      <div id="runModalBody"></div>
+    </div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const qEl = $("q"), sugEl = $("suggestions"), statusEl = $("status"),
@@ -349,6 +417,40 @@
     let debounce;
     let activeQuery = "";
     let lastSelected = null;  // the picked suggestion, for the prompt-preview panel
+    let lastVersion = "v1";   // which pipeline produced the shown result, for the prompt preview
+    let lastResultData = null;  // the last rendered result dict, for live room-scale re-render
+
+    // Money helpers (module-scope so totals can be recomputed live).
+    const parseMoney = (s) => Number(String(s ?? "").replace(/[$,]/g, "")) || 0;
+    const fmtMoney = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // Live room-scale multipliers from the settings inputs (blank = omitted),
+    // and the multiplier that applies to a given renovation row by its RoomType.
+    const roomScale = () => {
+      const m = {};
+      for (const [room, id] of [["bathroom", "scaleBathroom"], ["kitchen", "scaleKitchen"]]) {
+        const v = $(id).value.trim();
+        if (v !== "") m[room] = Number(v);
+      }
+      return m;
+    };
+    // A renovation's room type — from the backend `RoomType` when present, else
+    // derived from its top-level group so live scaling works without a re-run
+    // (and on older results). Kitchen variants + bathroom roll up to one type.
+    const ROOM_OF_ROOT = {
+      "Bathroom": "bathroom", "Bathroom - Additional Items": "bathroom",
+      "Kitchen - House": "kitchen", "Kitchen - Apartment": "kitchen", "Kitchen - Additional Items": "kitchen",
+    };
+    const roomTypeOf = (r) =>
+      r.RoomType || ROOM_OF_ROOT[(r.groupPath && r.groupPath.length) ? r.groupPath[0] : (r.parentName || r.Name || "")] || null;
+    const liveCount = (r) => roomScale()[roomTypeOf(r)] ?? 1;
+
+    // Re-render the shown result from the stored data + current multipliers — no refetch.
+    for (const id of ["scaleBathroom", "scaleKitchen"]) {
+      $(id).addEventListener("input", () => {
+        if (lastResultData && lastSelected) renderResult(lastSelected, lastResultData, lastVersion);
+      });
+    }
 
     $("overrideToggle").addEventListener("change", (e) => {
       $("overrideFields").hidden = !e.target.checked;
@@ -415,6 +517,10 @@
       if (label) body.label = label;
       const settlement = settlementIso();
       if (settlement) body.settlementDate = settlement;
+      // Manual room-scaling multipliers (blank = leave at ×1). Pricing-only:
+      // the backend keeps these out of the prompt. Applied live client-side too.
+      const scale = roomScale();
+      if (Object.keys(scale).length) body.config = { roomScale: scale };
       return body;
     }
 
@@ -425,7 +531,7 @@
       const pre = $("promptText");
       pre.textContent = "Loading…";
       try {
-        const resp = await fetch("/debug/prompt", {
+        const resp = await fetch(lastVersion === "v2" ? "/debug/prompt/v2" : "/debug/prompt", {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify(buildBody(lastSelected)),
@@ -497,27 +603,47 @@
       sugEl.hidden = false;
     }
 
-    async function selectSuggestion(s) {
-      clearSuggestions();
+    // Mark a property as picked: show it, enable the run buttons, load photos.
+    // Running is a separate step (the Run v1 / Run v2 buttons).
+    function markSelected(s) {
       lastSelected = s;
+      $("picked").innerHTML = `Selected <strong></strong> &nbsp;·&nbsp; rp_id ${s.suggestionId} — choose a version to run`;
+      $("picked").querySelector("strong").textContent = s.suggestion;
+      $("picked").hidden = false;
+      $("runV1").disabled = false;
+      $("runV2").disabled = false;
+    }
+
+    function selectSuggestion(s) {
+      clearSuggestions();
       qEl.value = s.suggestion;
       activeQuery = s.suggestion;
       resultEl.classList.remove("show");
       showError("");
-      showStatus("Thinking…");
-
-      // Photos load in parallel — they're non-fatal to the estimate.
+      showStatus("");
+      markSelected(s);
+      // Photos load now so they're ready before/while running.
       loadPhotos(s.suggestionId);
+    }
 
+    // Run the picked property through a pipeline. `version` only picks the
+    // endpoint ("v1" -> /estimate, "v2" -> /estimate/v2); the body is identical.
+    async function runEstimate(version) {
+      if (!lastSelected) return;
+      const s = lastSelected;
+      resultEl.classList.remove("show");
+      showError("");
+      showStatus("Thinking…");
       try {
-        const resp = await fetch("/estimate", {
+        const resp = await fetch(version === "v2" ? "/estimate/v2" : "/estimate", {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify(buildBody(s)),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || `Estimate failed (${resp.status})`);
-        renderResult(s, data);
+        lastResultData = data;  // stored so room-scale edits re-render without a refetch
+        renderResult(s, data, version);
         loadRuns(s.suggestionId);  // refresh the saved-runs panel (incl. this run)
       } catch (e) {
         showError(e.message);
@@ -525,17 +651,28 @@
         showStatus("");
       }
     }
+    $("runV1").addEventListener("click", () => runEstimate("v1"));
+    $("runV2").addEventListener("click", () => runEstimate("v2"));
 
-    function renderResult(s, data) {
-      $("selected").innerHTML = `Showing estimate for <strong></strong> &nbsp;·&nbsp; rp_id ${s.suggestionId}`;
+    function renderResult(s, data, version) {
+      // Fall back to detecting the pipeline from the payload (v2 carries Stages).
+      const ver = version || (data.Stages ? "v2" : "v1");
+      lastVersion = ver;  // so the prompt-preview panel fetches the matching pipeline's prompt
+      $("selected").innerHTML = `Showing estimate for <strong></strong> &nbsp;·&nbsp; rp_id ${s.suggestionId} &nbsp;·&nbsp; ${ver}`;
       $("selected").querySelector("strong").textContent = s.suggestion;
 
-      $("total").textContent = data["Renovations Total"] || "$0.00";
+      // Totals are computed client-side from each row's base cost × its live
+      // room multiplier, so the room-scale inputs update them instantly.
+      const renos = data["Renovations"] || [];
+      $("total").textContent = fmtMoney(renos.reduce((t, r) => t + parseMoney(r.FinalCost) * liveCount(r), 0));
       const hasOwnerSplit = data["Previous Owner Total"] != null;
       $("ownerTotals").hidden = !hasOwnerSplit;
       if (hasOwnerSplit) {
-        $("prevOwnerTotal").textContent = data["Previous Owner Total"];
-        $("currOwnerTotal").textContent = data["Current Owner Total"];
+        const owner = (name) => fmtMoney(renos
+          .filter((r) => r.Owner === name)
+          .reduce((t, r) => t + parseMoney(r.FinalCost) * liveCount(r), 0));
+        $("prevOwnerTotal").textContent = owner("Previous Owner");
+        $("currOwnerTotal").textContent = owner("Current Owner");
       }
 
       const summary = data["Summary Description"] || "";
@@ -550,47 +687,109 @@
       $("promptWrap").open = false;
       $("promptWrap").hidden = false;
 
-      const renos = data["Renovations"] || [];
-      const tableWrap = $("tableWrap");
-      if (!renos.length) {
-        tableWrap.innerHTML = `<div class="none">No depreciable renovations were detected from the property's photos.</div>`;
+      // v2 returns per-stage outputs for debugging; v1 has none.
+      if (data.Stages) {
+        $("stagesJson").textContent = JSON.stringify(data.Stages, null, 2);
+        $("stagesWrap").open = false;
+        $("stagesWrap").hidden = false;
       } else {
-        const rowHtml = (r) => `
-          <tr>
-            <td>${escapeHtml(r.Name ?? "")}</td>
-            <td>${escapeHtml(r.Year ?? "")}</td>
-            <td>${escapeHtml(r.Owner ?? "")}</td>
-            <td class="num">${escapeHtml(String(r.Quantity ?? ""))}</td>
-            <td>${escapeHtml(r.Unit ?? "")}</td>
-            <td class="num">${escapeHtml(r.DefaultRate ?? "")}</td>
-            <td class="num">${escapeHtml(r.FinalCost ?? "")}</td>
-          </tr>`;
-        // Group by parent label, first-seen order; items with no parent render flat.
-        const groups = [], at = {};
-        for (const r of renos) {
-          const key = r.parentName || "";
-          if (!(key in at)) { at[key] = groups.length; groups.push({ name: r.parentName, items: [] }); }
-          groups[at[key]].items.push(r);
-        }
-        const rows = groups.map((g) =>
-          (g.name ? `<tr class="group"><td colspan="7">${escapeHtml(g.name)}</td></tr>` : "") +
-          g.items.map(rowHtml).join("")
-        ).join("");
-        tableWrap.innerHTML = `
-          <table>
-            <thead>
-              <tr>
-                <th>Renovation</th><th>Year</th><th>Owner</th>
-                <th class="num">Qty</th><th>Unit</th>
-                <th class="num">Rate</th><th class="num">Cost</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>`;
+        $("stagesWrap").hidden = true;
       }
 
+      $("tableWrap").innerHTML = renovationsTableHtml(renos);
       $("disclaimer").textContent = data["Disclaimer"] || "";
       resultEl.classList.add("show");
+    }
+
+    // Renovations as a grouped table (by parent). Shared by the result view and
+    // the run-details modal. Empty list renders a friendly "none" message.
+    function renovationsTableHtml(renos) {
+      if (!renos.length) {
+        return `<div class="none">No depreciable renovations were detected from the property's photos.</div>`;
+      }
+      const pad = (d) => `style="padding-left:${14 + d * 20}px"`;
+      // Full ancestor path per row (root → immediate parent); older runs only
+      // carry parentName, so fall back to a single level.
+      const pathOf = (r) => (r.groupPath && r.groupPath.length) ? r.groupPath : (r.parentName ? [r.parentName] : []);
+
+      // Cost of every group's whole subtree, keyed by its joined path.
+      const sub = {};
+      for (const r of renos) {
+        const p = pathOf(r), c = parseMoney(r.FinalCost);
+        for (let d = 0; d < p.length; d++) {
+          const k = p.slice(0, d + 1).join(" › ");
+          sub[k] = (sub[k] || 0) + c;
+        }
+      }
+      // Live room scaling: the manual multiplier for a row's RoomType (from the
+      // settings inputs). Line items stay one room's worth; the ×N shows on the
+      // top-level group (or inline for a flat item) and the subtotal/total reflect it.
+      const rootCount = {};
+      for (const r of renos) {
+        const n = liveCount(r);
+        if (n !== 1) {
+          const root = pathOf(r).length ? pathOf(r)[0] : (r.Name ?? "");
+          rootCount[root] = { count: n, of: roomTypeOf(r) || "" };
+        }
+      }
+      const badge = (root) => rootCount[root]
+        ? ` <span class="help">× ${rootCount[root].count} ${escapeHtml(rootCount[root].of)}</span>` : "";
+
+      // Walk in order, opening a nested header each time the path deepens/changes.
+      const rows = [];
+      let last = [];
+      for (const r of renos) {
+        const p = pathOf(r);
+        let common = 0;
+        while (common < p.length && common < last.length && p[common] === last[common]) common++;
+        for (let d = common; d < p.length; d++) {
+          const key = p.slice(0, d + 1).join(" › ");
+          const anc = p.slice(0, d).join(" › ");  // groups this header sits inside
+          const cnt = d === 0 && rootCount[p[0]] ? rootCount[p[0]].count : 1;  // scale top level only
+          rows.push(
+            `<tr class="group" data-gk="${escapeHtml(key)}" data-anc="${escapeHtml(anc)}" onclick="toggleRenoGroup(this)">` +
+            `<td class="gname" colspan="6" ${pad(d)}>${escapeHtml(p[d])}${d === 0 ? badge(p[0]) : ""}</td>` +
+            `<td class="num">${fmtMoney(sub[key] * cnt)}</td></tr>`
+          );
+        }
+        last = p;
+        // A flat (ungrouped) row scales inline, since it has no header to carry the ×count.
+        const n = liveCount(r);
+        const flatScaled = p.length === 0 && n !== 1;
+        rows.push(
+          `<tr class="gitem" data-anc="${escapeHtml(p.join(" › "))}">` +
+          `<td ${pad(p.length)}>${escapeHtml(r.Name ?? "")}${flatScaled ? badge(r.Name ?? "") : ""}</td>` +
+          `<td>${escapeHtml(r.Year ?? "")}</td>` +
+          `<td>${escapeHtml(r.Owner ?? "")}</td>` +
+          `<td class="num">${escapeHtml(String(r.Quantity ?? ""))}</td>` +
+          `<td>${escapeHtml(r.Unit ?? "")}</td>` +
+          `<td class="num">${escapeHtml(r.DefaultRate ?? "")}</td>` +
+          `<td class="num">${flatScaled ? fmtMoney(parseMoney(r.FinalCost) * n) : escapeHtml(r.FinalCost ?? "")}</td></tr>`
+        );
+      }
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th>Renovation</th><th>Year</th><th>Owner</th>
+              <th class="num">Qty</th><th>Unit</th>
+              <th class="num">Rate</th><th class="num">Cost</th>
+            </tr>
+          </thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>`;
+    }
+
+    // Collapse/expand a group's whole subtree. Visibility is recomputed from the
+    // set of collapsed groups, so nested collapse/expand can't drift out of sync:
+    // a row hides when any collapsed group is one of its ancestors.
+    function toggleRenoGroup(row) {
+      row.classList.toggle("collapsed");
+      const table = row.closest("table");
+      const collapsed = [...table.querySelectorAll("tr.group.collapsed")].map((g) => g.dataset.gk);
+      const hidden = (anc) => collapsed.some((k) => anc === k || anc.startsWith(k + " › "));
+      table.querySelectorAll("tr.group, tr.gitem")
+        .forEach((tr) => { tr.hidden = hidden(tr.dataset.anc || ""); });
     }
 
     // ---- Saved runs (version comparison) ----
@@ -612,7 +811,7 @@
           .filter(Boolean).join(" · ");
         const when = (r.created_at || "").replace("T", " ").slice(0, 16);
         return `
-          <tr>
+          <tr style="cursor:pointer" title="Open run details" onclick="openRunDetails(${r.id})">
             <td>${escapeHtml(when)}</td>
             <td>${escapeHtml(r.label || "—")}</td>
             <td>${escapeHtml(r.model || "")}</td>
@@ -631,7 +830,9 @@
         </table>`;
     }
 
+    let savedRuns = [];
     function renderRuns(runs) {
+      savedRuns = runs;
       if (!runs.length) { $("runsWrap").hidden = true; return; }
       $("runsBody").innerHTML = runsTableHtml(runs);
       $("runsWrap").hidden = false;
@@ -669,7 +870,7 @@
         ).join("<br>");
         return `
           <details class="hist-item">
-            <summary><input type="checkbox" class="cmp" value="${r.id}" onclick="event.stopPropagation()" />${head} <span class="help">(${renos.length} items)</span> <button class="tab" onclick="event.stopPropagation(); openRun(${r.id})">Open</button></summary>
+            <summary><input type="checkbox" class="cmp" value="${r.id}" onclick="event.stopPropagation()" />${head} <span class="help">(${renos.length} items)</span> <button class="tab" onclick="event.stopPropagation(); openRunDetails(${r.id})">Details</button> <button class="tab" onclick="event.stopPropagation(); openRun(${r.id})">Open</button></summary>
             <div class="meta" style="margin-top:8px"><strong>Summary:</strong> ${escapeHtml(resp["Summary Description"] || "—")}</div>
             <div class="meta" style="margin-top:8px">${items || "<span class='help'>No items</span>"}</div>
           </details>`;
@@ -682,11 +883,62 @@
       if (!run) return;
       showTab("estimate");
       const s = { suggestion: run.address || `rp_id ${run.rp_id}`, suggestionId: run.rp_id };
-      lastSelected = s;
+      markSelected(s);
       loadPhotos(run.rp_id);
-      renderResult(s, run.response || {});
+      lastResultData = run.response || {};  // enable live room-scale re-render
+      renderResult(s, lastResultData);
       loadRuns(run.rp_id);
     }
+
+    // ---- Run details modal (full record for one saved run) ----
+    function findRun(id) { return [...historyRuns, ...savedRuns].find((r) => r.id === id); }
+
+    function kvHtml(rows) {
+      return `<div class="kv">` + rows.map(([k, v]) =>
+        `<span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(String(v))}</span>`).join("") + `</div>`;
+    }
+
+    function openRunDetails(id) {
+      const run = findRun(id);
+      if (!run) return;
+      const r = run.response || {}, u = r.Usage;
+      const meta = [
+        ["When", (run.created_at || "").replace("T", " ").slice(0, 19)],
+        ["Address", run.address || `rp_id ${run.rp_id}`],
+        ["Property id", run.rp_id],
+        ["Model", run.model || "—"],
+        ["Reasoning effort", run.reasoning_effort || "—"],
+        ["Temperature", run.temperature != null ? run.temperature : "—"],
+        ["Label", run.label || "—"],
+      ];
+      const usage = (u && u.total_tokens)
+        ? [["Tokens (prompt / completion / total)", `${u.prompt_tokens} / ${u.completion_tokens} / ${u.total_tokens}`],
+           ["Cost (USD)", `$${Number(u.cost).toFixed(4)}`]]
+        : [["Usage", "— (run predates token tracking)"]];
+      const ownerSplit = r["Previous Owner Total"] != null
+        ? `<div class="totalcard"><span class="label">Previous Owner</span><span class="amount">${escapeHtml(r["Previous Owner Total"])}</span>` +
+          `<span class="label">Current Owner</span><span class="amount">${escapeHtml(r["Current Owner Total"])}</span></div>` : "";
+      const summary = r["Summary Description"] || "";
+      const debug = JSON.stringify({ Property: r.Property ?? null, GFA: r.GFA ?? null }, null, 2);
+      $("runModalBody").innerHTML = `
+        <h3>Run details</h3>
+        ${kvHtml(meta)}
+        ${kvHtml(usage)}
+        <div class="totalcard"><span class="label">Renovations Total</span>` +
+          `<span class="amount">${escapeHtml(r["Renovations Total"] || "$0.00")}</span></div>
+        ${ownerSplit}
+        ${renovationsTableHtml(r.Renovations || [])}
+        ${summary ? `<div class="summary" style="margin-top:18px"><div class="label">Summary</div><div>${escapeHtml(summary)}</div></div>` : ""}
+        <details class="summary" style="margin-top:14px"><summary class="label" style="cursor:pointer">Property &amp; GFA</summary><pre>${escapeHtml(debug)}</pre></details>
+        ${run.prompt ? `<details class="summary" style="margin-top:14px"><summary class="label" style="cursor:pointer">Prompt sent to AI</summary><pre>${escapeHtml(run.prompt)}</pre></details>` : ""}
+        ${r["Disclaimer"] ? `<div class="disclaimer">${escapeHtml(r["Disclaimer"])}</div>` : ""}`;
+      $("runModal").hidden = false;
+    }
+
+    function closeRunModal() { $("runModal").hidden = true; }
+    $("runModalClose").addEventListener("click", closeRunModal);
+    $("runModal").addEventListener("click", (e) => { if (e.target.id === "runModal") closeRunModal(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRunModal(); });
 
     // Tick 2+ runs → a matrix of items (rows) × runs (cols) with diffs highlighted.
     function selectedRuns() {

@@ -131,11 +131,36 @@ def test_estimate_photos_error_maps_to_502(monkeypatch):
     assert client.post("/estimate", json=VALID_BODY).status_code == 502
 
 
+def test_estimate_v2_success(monkeypatch):
+    monkeypatch.setattr(
+        main, "build_estimate_v2",
+        lambda req: {"Renovations Total": "$0.00", "Stages": {"observations": {}}},
+    )
+    r = client.post("/estimate/v2", json=VALID_BODY)
+    assert r.status_code == 200
+    assert r.json()["Stages"] == {"observations": {}}
+
+
+def test_estimate_v2_no_photos_maps_to_422(monkeypatch):
+    def boom(req):
+        raise NoPhotosError("No usable photos found for rp_id RP1")
+
+    monkeypatch.setattr(main, "build_estimate_v2", boom)
+    assert client.post("/estimate/v2", json=VALID_BODY).status_code == 422
+
+
 def test_debug_prompt_returns_text(monkeypatch):
     monkeypatch.setattr(main, "preview_estimate_prompt", lambda req: "X")
     r = client.post("/debug/prompt", json=VALID_BODY)
     assert r.status_code == 200
     assert r.text == "X"
+
+
+def test_debug_prompt_v2_returns_text(monkeypatch):
+    monkeypatch.setattr(main, "preview_estimate_prompt_v2", lambda req: "V2PROMPT")
+    r = client.post("/debug/prompt/v2", json=VALID_BODY)
+    assert r.status_code == 200
+    assert r.text == "V2PROMPT"
 
 
 def test_debug_prompt_upstream_error_maps_to_502(monkeypatch):

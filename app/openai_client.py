@@ -6,14 +6,17 @@ import httpx
 from openai import OpenAI
 
 from .config import get_settings
+from .errors import ModelError
 from .pricing import price_items
 from .schemas import Photo
 
 # The vision model is sent at most this many photos per request.
 MAX_PHOTOS = 60
 
-# Cap on tokens the model may produce.
-MAX_OUTPUT_TOKENS = 16000
+# Cap on tokens the model may produce. Sized so the per-photo observation step
+# (up to MAX_PHOTOS verbose entries) doesn't get cut off mid-JSON — truncation
+# was the main cause of "invalid JSON" errors on photo-heavy properties.
+MAX_OUTPUT_TOKENS = 32000
 
 # gemini-3.5-flash standard pricing, USD per 1M tokens (output includes thinking).
 # Source: https://ai.google.dev/gemini-api/docs/pricing
@@ -21,12 +24,27 @@ _INPUT_USD_PER_1M = 1.50
 _OUTPUT_USD_PER_1M = 9.00
 
 
-def _log_usage(prompt_tokens: int, completion_tokens: int) -> None:
+def _usage(prompt_tokens: int, completion_tokens: int) -> dict:
+    """Token counts + USD cost for a call; also logs one line to stdout."""
     cost = (prompt_tokens * _INPUT_USD_PER_1M + completion_tokens * _OUTPUT_USD_PER_1M) / 1_000_000
-    print(
-        f"[usage] prompt={prompt_tokens} completion={completion_tokens} "
-        f"total={prompt_tokens + completion_tokens} cost=${cost:.4f}"
-    )
+    summary = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "cost": round(cost, 4),
+    }
+    print(f"[usage] {summary}")
+    return summary
+
+
+def merge_usage(*summaries: dict) -> dict:
+    """Sum several usage summaries (multi-call pipelines) into one."""
+    total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost": 0.0}
+    for s in summaries:
+        for k in total:
+            total[k] += s.get(k, 0)
+    total["cost"] = round(total["cost"], 4)
+    return total
 
 # Reasoning depth for reasoning-class models. Medium keeps borderline item
 # detection consistent run-to-run; low effort flips items in and out.
@@ -106,6 +124,18 @@ def build_input_text(model_input: dict) -> str:
     return "Input data:\n" + json.dumps(model_input)
 
 
+def _extract_json(text: str) -> str:
+    """Pull the JSON object out of the model's reply, tolerating a ```json fence
+    or stray prose some models add despite JSON mode. For a single top-level
+    object the first '{' and last '}' are its true bounds, so slicing between
+    them is safe even when inner strings contain braces.
+    """
+    if not text:
+        return text
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if start != -1 and end > start else text
+
+
 def generate_estimate(
     model: str,
     prompt: str,
@@ -116,14 +146,14 @@ def generate_estimate(
     living_space: float | None = None,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """Call the vision model with the prompt, input data, and property photos.
 
     `model_input` is the JSON object the prompt expects (property context,
     trimmed renovationItems dataset, the backend-computed `gfa`, config).
     `library` is the full catalog keyed by `_id`, used to price the model's
     tool calls (the trimmed `model_input` copy has no rates). Returns the raw
-    JSON string from the model.
+    JSON string from the model plus a usage summary (tokens + USD cost).
 
     The model makes a single tool call — `calculate_renovations` — to price its
     detected items; `living_space` (computed server-side from the GFA) caps the
@@ -172,8 +202,7 @@ def generate_estimate(
             completion_tokens += usage.completion_tokens
         message = resp.choices[0].message
         if not getattr(message, "tool_calls", None):
-            _log_usage(prompt_tokens, completion_tokens)
-            return message.content
+            return message.content, _usage(prompt_tokens, completion_tokens)
         kwargs["messages"].append(message)
         for call in message.tool_calls:
             args = json.loads(call.function.arguments)
@@ -185,5 +214,93 @@ def generate_estimate(
                     "content": json.dumps(result),
                 }
             )
-    _log_usage(prompt_tokens, completion_tokens)
-    return message.content
+    return message.content, _usage(prompt_tokens, completion_tokens)
+
+
+def _photo_content(photos: list[Photo]) -> list[dict]:
+    """Vision content blocks for up to MAX_PHOTOS, inlined as base64 (Gemini
+    won't fetch remote URLs). A photo that can't be fetched is skipped; each
+    image is followed by its capture date when known."""
+    content: list[dict] = []
+    for photo in photos[:MAX_PHOTOS]:
+        try:
+            data_url = _image_data_url(photo.url)
+        except httpx.HTTPError:
+            continue
+        content.append({"type": "image_url", "image_url": {"url": data_url}})
+        if photo.date:
+            content.append(
+                {"type": "text", "text": f"The photo was taken on {photo.date}"}
+            )
+    return content
+
+
+def _chat_json(
+    model: str,
+    content: list[dict],
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """One JSON-only chat completion (no tools). Returns (content, usage summary).
+
+    Shared by the v2 pipeline's observe/match stages. Reasoning-class models get
+    `reasoning_effort` and no temperature; others get `temperature`.
+    """
+    kwargs: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "response_format": {"type": "json_object"},
+    }
+    if _is_reasoning_model(model):
+        kwargs["reasoning_effort"] = reasoning_effort or REASONING_EFFORT
+    else:
+        kwargs["temperature"] = temperature if temperature is not None else 0
+
+    resp = _client().chat.completions.create(**kwargs)
+    usage = getattr(resp, "usage", None)
+    summary = _usage(usage.prompt_tokens, usage.completion_tokens) if usage else {}
+    choice = resp.choices[0]
+    # A cut-off response yields incomplete JSON; surface it as a clear error
+    # (not a mystery "invalid JSON") so the cause — too many photos — is obvious.
+    if choice.finish_reason == "length":
+        raise ModelError(
+            f"Vision model output hit the {MAX_OUTPUT_TOKENS}-token cap and was "
+            "cut off before completing its JSON — the property likely has too "
+            "many photos. Reduce MAX_PHOTOS or raise MAX_OUTPUT_TOKENS."
+        )
+    return _extract_json(choice.message.content or ""), summary
+
+
+def observe_photos(
+    model: str,
+    prompt: str,
+    photos: list[Photo],
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """v2 Step 1: describe what's visible in each photo (no matching/pricing)."""
+    content = [{"type": "text", "text": prompt}, *_photo_content(photos)]
+    return _chat_json(
+        model, content, reasoning_effort=reasoning_effort, temperature=temperature
+    )
+
+
+def match_candidates(
+    model: str,
+    prompt: str,
+    payload: dict,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """v2 Step 2: match observations to the catalog (text-only, no photos)."""
+    content = [
+        {"type": "text", "text": prompt},
+        {"type": "text", "text": build_input_text(payload)},
+    ]
+    return _chat_json(
+        model, content, reasoning_effort=reasoning_effort, temperature=temperature
+    )
