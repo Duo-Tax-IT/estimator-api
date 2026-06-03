@@ -109,7 +109,10 @@ def price_items(
             "groupPath": _ancestry(lib, library),
         }
         priced.append(row)
-        if unit == "sqm":
+        # `capExempt` items (e.g. an assumed internal repaint, sized off gfa room
+        # areas) are wall/room-based, not floor-bound, so they're kept out of the
+        # livingSpace cap below — otherwise they'd scale down genuine floor items.
+        if unit == "sqm" and not item.get("capExempt"):
             sqm_items.append(row)
 
     used = sum(r["Quantity"] for r in sqm_items)

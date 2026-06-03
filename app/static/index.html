@@ -150,6 +150,8 @@
     .carousel .nav.prev { left: 10px; }
     .carousel .nav.next { right: 10px; }
     .carousel .meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .carousel .meta a { color: var(--accent); text-decoration: none; }
+    .carousel .meta a:hover { text-decoration: underline; }
     .carousel .thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
     .carousel .thumbs img {
       flex: 0 0 auto; width: 68px; height: 50px; object-fit: cover;
@@ -158,6 +160,27 @@
     }
     .carousel .thumbs img:hover { opacity: .85; }
     .carousel .thumbs img.active { opacity: 1; border-color: var(--accent); }
+    .carousel .meta .viewall { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .carousel .meta .viewall:hover { text-decoration: underline; }
+
+    .photogrid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 8px; margin-top: 12px;
+    }
+    .photogrid figure { margin: 0; position: relative; cursor: pointer; }
+    .photogrid img {
+      width: 100%; height: 116px; object-fit: cover; display: block;
+      border-radius: 8px; border: 1px solid var(--border);
+    }
+    .photogrid figure:hover img { border-color: var(--accent); }
+    .photogrid figcaption {
+      position: absolute; top: 6px; left: 6px; font-size: 11px; font-variant-numeric: tabular-nums;
+      background: rgba(15,17,21,.82); color: var(--text); padding: 1px 8px; border-radius: 999px;
+    }
+    .photogrid .pdate {
+      position: absolute; bottom: 6px; right: 6px; font-size: 10px; color: var(--muted);
+      background: rgba(15,17,21,.82); padding: 1px 6px; border-radius: 999px;
+    }
 
     .totalcard {
       display: flex; justify-content: space-between; align-items: center;
@@ -296,8 +319,9 @@
         <div class="viewport"><div id="track" class="track"></div></div>
         <button class="nav prev" id="prevBtn" type="button" aria-label="Previous photo">‹</button>
         <button class="nav next" id="nextBtn" type="button" aria-label="Next photo">›</button>
-        <div class="meta"><span id="carouselCounter"></span><span id="carouselDate"></span></div>
+        <div class="meta"><span id="carouselCounter"></span><a id="viewAllPhotos" class="viewall" href="#" hidden>View all</a><a id="downloadPhotos" href="#">Download all</a><span id="carouselDate"></span></div>
         <div id="thumbs" class="thumbs"></div>
+        <div id="photoGrid" class="photogrid" hidden></div>
       </div>
       <div class="totalcard">
         <span class="label">Renovations Total</span>
@@ -870,7 +894,7 @@
         ).join("<br>");
         return `
           <details class="hist-item">
-            <summary><input type="checkbox" class="cmp" value="${r.id}" onclick="event.stopPropagation()" />${head} <span class="help">(${renos.length} items)</span> <button class="tab" onclick="event.stopPropagation(); openRunDetails(${r.id})">Details</button> <button class="tab" onclick="event.stopPropagation(); openRun(${r.id})">Open</button></summary>
+            <summary><input type="checkbox" class="cmp" value="${r.id}" onclick="event.stopPropagation()" />${head} <span class="help">(${renos.length} items)</span> <button class="tab" onclick="event.stopPropagation(); openRunDetails(${r.id})">Details</button> <button class="tab" onclick="event.stopPropagation(); openRun(${r.id})">Open</button> <a class="tab" href="/photos/download?rpId=${encodeURIComponent(r.rp_id)}" onclick="event.stopPropagation()">Photos</a></summary>
             <div class="meta" style="margin-top:8px"><strong>Summary:</strong> ${escapeHtml(resp["Summary Description"] || "—")}</div>
             <div class="meta" style="margin-top:8px">${items || "<span class='help'>No items</span>"}</div>
           </details>`;
@@ -1013,6 +1037,7 @@
         const { photos } = await resp.json();
         if (!photos || !photos.length) return;
         carouselPhotos = photos;
+        $("downloadPhotos").href = `/photos/download?rpId=${encodeURIComponent(rpId)}`;
         renderCarousel();
       } catch { /* non-fatal */ }
     }
@@ -1033,10 +1058,45 @@
           ).join("")
         : "";
 
+      // Reset the (lazy) "view all" grid for the new set of photos.
+      $("viewAllPhotos").hidden = !multi;
+      $("viewAllPhotos").textContent = "View all";
+      $("photoGrid").hidden = true;
+      $("photoGrid").innerHTML = "";
+
       carouselIndex = 0;
       updateCarousel();
       $("carousel").hidden = false;
     }
+
+    // A numbered grid of every photo, for verifying a candidate's "Photo N" refs.
+    function renderPhotoGrid() {
+      $("photoGrid").innerHTML = carouselPhotos.map((p, i) =>
+        `<figure data-index="${i}">` +
+        `<img loading="lazy" alt="Photo ${i + 1}" src="${escapeHtml(p.url)}" />` +
+        `<figcaption>Photo ${i + 1}</figcaption>` +
+        (p.date ? `<span class="pdate">${escapeHtml(p.date)}</span>` : "") +
+        `</figure>`
+      ).join("");
+    }
+
+    $("viewAllPhotos").addEventListener("click", (e) => {
+      e.preventDefault();
+      const grid = $("photoGrid");
+      const show = grid.hidden;
+      if (show && !grid.innerHTML) renderPhotoGrid();
+      grid.hidden = !show;
+      $("viewAllPhotos").textContent = show ? "Hide all" : "View all";
+    });
+
+    // Click a grid photo → jump the carousel to it.
+    $("photoGrid").addEventListener("click", (e) => {
+      const fig = e.target.closest("figure");
+      if (!fig) return;
+      carouselIndex = Number(fig.dataset.index);
+      updateCarousel();
+      $("carousel").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
 
     function updateCarousel() {
       $("track").style.transform = `translateX(-${carouselIndex * 100}%)`;

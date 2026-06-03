@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import openai
 
@@ -37,6 +38,25 @@ DISCLAIMER = (
 
 OBSERVE_PROMPT_FILE = "observe_prompt.txt"
 CANDIDATES_PROMPT_FILE = "candidates_prompt.txt"
+
+# Internal-repaint assumption (opt-in via config.assumeInternalRepaint). When the
+# property is old enough and the model saw visibly sound paint, assume the rooms
+# of that type were repainted, using the per-room areas already in `gfa`.
+REPAINT_MIN_AGE = 10
+INTERNAL_PAINT_NAME = "Painting - Internal"
+# observe `roomType` -> the `gfa` bucket holding that type's area. living/laundry
+# have no own bucket — their area sits inside the leftover livingSpace.
+_PAINT_AREA_KEY = {
+    "bedroom": "bedroom", "bathroom": "bathroom", "kitchen": "kitchen",
+    "living": "livingSpace", "laundry": "livingSpace",
+}
+# Honest disclaimer used only when the repaint assumption fires.
+DISCLAIMER_WITH_REPAINT = (
+    "This assessment is based on visual analysis of provided images and a "
+    f"predefined renovation item dataset, plus an assumed internal repaint for "
+    f"properties over {REPAINT_MIN_AGE} years old whose interior paint appears "
+    "sound. The repaint is an assumption, not confirmed from the images."
+)
 
 
 def _parse(raw: str, stage: str) -> dict:
@@ -80,6 +100,56 @@ def preview_estimate_prompt_v2(req: EstimateRequest) -> str:
     )
 
 
+def _internal_paint_row(validated, observations, property_data, config, gfa, library):
+    """A synthetic 'Painting - Internal' detected-row when the repaint assumption
+    applies, plus a decision record for Stages; (None, decision) otherwise.
+
+    Gated on: config opt-in, property age >= REPAINT_MIN_AGE, and the model seeing
+    visibly sound paint (clean/new_like, none worn/poor) in a room type. The area
+    reuses the per-room buckets already computed in `gfa`. Year is left unknown
+    (no fabricated date -> BCI factor 1.0, current-owner by default); `capExempt`
+    keeps it out of the livingSpace sqm cap so it can't shrink real flooring.
+    """
+    if not config.get("assumeInternalRepaint"):
+        return None, {"applied": False, "reason": "disabled"}
+    built = str(property_data.get("yearBuilt", "")).strip()
+    if not built.isdigit():
+        return None, {"applied": False, "reason": "no yearBuilt"}
+    age = date.today().year - int(built)
+    if age < REPAINT_MIN_AGE:
+        return None, {"applied": False, "reason": f"age {age} < {REPAINT_MIN_AGE}"}
+    paint = next((it for it in library.values() if it["name"] == INTERNAL_PAINT_NAME), None)
+    if not paint or not gfa:
+        return None, {"applied": False, "reason": "no paint item or no gfa"}
+    if any(c.get("_id") == paint["_id"] for c in validated):
+        return None, {"applied": False, "reason": "already detected by model"}
+    # Room types whose photos show sound, fresh paint (none worn/poor).
+    keys, rooms = set(), []
+    for room_type, key in _PAINT_AREA_KEY.items():
+        shots = [
+            p for p in observations.get("photoObservations", [])
+            if p.get("roomType") == room_type
+        ]
+        if not shots or any(p.get("condition") in ("worn", "poor") for p in shots):
+            continue
+        if any(p.get("condition") in ("clean", "new_like") for p in shots):
+            keys.add(key)
+            rooms.append(room_type)
+    areas = {k: round(gfa.get(k, 0), 1) for k in keys}
+    total = round(sum(areas.values()), 1)
+    if total <= 0:
+        return None, {"applied": False, "reason": "no rooms with fresh paint"}
+    row = {
+        "_id": paint["_id"], "name": paint["name"], "area": total,
+        "factor": 1.0, "Year": "", "capExempt": True,
+    }
+    decision = {
+        "applied": True, "reason": f"age {age}; fresh paint in {rooms}",
+        "rooms": rooms, "areas": areas, "totalArea": total,
+    }
+    return row, decision
+
+
 def build_estimate_v2(req: EstimateRequest) -> dict:
     """Detect renovations via the multi-step v2 pipeline.
 
@@ -107,8 +177,9 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
     library = {it["_id"]: it for it in renovation_items}
 
     try:
-        # Step 1 — observe what's visible (no matching).
-        obs_raw, obs_usage = observe_photos(
+        # Step 1 — observe what's visible (no matching). Also returns the room
+        # classifier's per-photo predictions for the Stages debug record.
+        obs_raw, obs_usage, room_hints = observe_photos(
             model,
             get_base_prompt(OBSERVE_PROMPT_FILE),
             photos,
@@ -133,6 +204,25 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
         raise ModelError(f"Vision model call failed: {exc}") from exc
 
     validated = candidates.get("validatedCandidates", [])
+    # Drop candidates dated at/before original construction — that's the original
+    # build, not a renovation (guards "new build + modern finish" false positives).
+    # Rejected ones move to rejectedCandidates so the Stages debug shows why.
+    year_built = str(property_data.get("yearBuilt", "")).strip()
+    if year_built.isdigit():
+        rejects = candidates.setdefault("rejectedCandidates", [])
+        kept = []
+        for c in validated:
+            y = str(c.get("estimatedYear", ""))
+            if y.isdigit() and int(y) <= int(year_built):
+                rejects.append({
+                    "candidateName": c.get("name"),
+                    "matchedItemId": c.get("_id"),
+                    "reason": f"estimatedYear {y} <= yearBuilt {year_built} (original build)",
+                    "evidence": "",
+                })
+            else:
+                kept.append(c)
+        validated = kept
 
     # Step 3 — price (deterministic; same expand/dedup/price path as v1). A
     # whole-room match (a 0-rate parent) is expanded to its leaf items, then
@@ -149,6 +239,13 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
         }
         for c in validated
     ]
+    # Internal-repaint assumption (opt-in): inject a paint row before pricing so
+    # it expands/prices like any item; recorded in Stages.paintAssumption.
+    paint_row, paint_decision = _internal_paint_row(
+        validated, observations, property_data, req.config or {}, gfa, library
+    )
+    if paint_row:
+        detected.append(paint_row)
     detected = dedup_by_id(expand_to_leaves(detected, library))
     priced = price_items(detected, library, living)
     renovations = priced["renovations"]
@@ -173,11 +270,17 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
         "Property": property_data,
         "GFA": gfa,
         "Summary Description": candidates.get("summary", ""),
-        "Disclaimer": DISCLAIMER,
+        "Disclaimer": DISCLAIMER_WITH_REPAINT if paint_decision["applied"] else DISCLAIMER,
         # Combined token counts + USD cost across both model calls.
         "Usage": merge_usage(obs_usage, cand_usage),
         "Stages": {
             "observations": observations,
+            # Room classifier predictions per photo (photoIndex matches the
+            # observe model's image order) — auditable vs observations.roomType.
+            "roomHints": room_hints,
+            # Internal-repaint assumption audit: whether it fired and the per-room
+            # areas (from gfa) that made up the assumed paint area.
+            "paintAssumption": paint_decision,
             "candidates": {
                 "validatedCandidates": validated,
                 "rejectedCandidates": candidates.get("rejectedCandidates", []),

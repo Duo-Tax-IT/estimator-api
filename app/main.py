@@ -2,14 +2,14 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 from .config import get_settings
 from .errors import ItemsFetchError, ModelError, NoPhotosError, RpDataFetchError
 from .estimator import build_full_estimate, preview_estimate_prompt
 from .estimator_v2 import build_estimate_v2, preview_estimate_prompt_v2
 from .prompts import get_base_prompt
-from .rpdata_client import fetch_photos, search_addresses
+from .rpdata_client import build_photos_zip, fetch_photos, search_addresses
 from .runs_db import list_runs, save_run
 from .schemas import EstimateRequest
 
@@ -66,6 +66,22 @@ def photos(rpId: str = Query(min_length=1)) -> dict:
         return {"photos": [p.model_dump() for p in fetch_photos(rpId)]}
     except RpDataFetchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/photos/download")
+def photos_download(rpId: str = Query(min_length=1)) -> Response:
+    """Download all usable photos for a property as a single zip."""
+    try:
+        data = build_photos_zip(rpId)
+    except NoPhotosError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RpDataFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{rpId}.zip"'},
+    )
 
 
 @app.post("/debug/prompt", response_class=PlainTextResponse)

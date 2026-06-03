@@ -16,6 +16,18 @@ each by its `photoIndex` (0-based). A photo's capture date, when known, is
 stated in the text right after the image — use it for `photoDate`. Do not claim
 an item is renovated unless there is a visible cue.
 
+A predicted room type (from a separate image classifier) may also appear in the
+text after an image, e.g. `Predicted room type: Kitchen (confidence 82%)`. Treat
+it as a hint, not ground truth. Always set `roomType` from what you actually see.
+Then decide whether the image confirms or contradicts the hint and set
+`hintAgreement`: "confirms" when they match, "overrides" when you see a different
+room, "no_hint" when no prediction was given. Never let the hint stop you
+observing what is actually present.
+
+Prefer "unknown" or "unclear" over guessing: if a surface is obstructed,
+cropped, blurry, or too small to read, say so rather than inventing detail.
+Only set `ageSignal` to "modern" when a visible style or finish supports it.
+
 Return STRICT JSON only — no markdown, no commentary — in this shape:
 
 {
@@ -24,10 +36,12 @@ Return STRICT JSON only — no markdown, no commentary — in this shape:
       "photoIndex": 0,
       "photoDate": "YYYY-MM-DD or null",
       "roomType": "kitchen | bathroom | bedroom | living | laundry | exterior | unknown",
+      "hintAgreement": "confirms | overrides | no_hint",
       "visibleFixtures": ["string"],
       "visibleSurfaces": ["string"],
       "visibleMaterials": ["string"],
-      "conditionWear": "string",
+      "condition": "poor | worn | average | clean | new_like | unknown",
+      "ageSignal": "old | mixed | modern | unknown",
       "possibleRenovationCues": ["string"],
       "unclearOrObstructed": ["string"]
     }

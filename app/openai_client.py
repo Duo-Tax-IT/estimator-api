@@ -8,6 +8,7 @@ from openai import OpenAI
 from .config import get_settings
 from .errors import ModelError
 from .pricing import price_items
+from .room_classifier import classify, format_hint
 from .schemas import Photo
 
 # The vision model is sent at most this many photos per request.
@@ -106,17 +107,21 @@ def _is_reasoning_model(model: str) -> bool:
     return model.lower().startswith(_REASONING_PREFIXES)
 
 
+def _data_url(resp: httpx.Response) -> str:
+    """Inline an already-fetched image response as a base64 data URI (Gemini's
+    OpenAI-compatible endpoint does not fetch remote URLs)."""
+    mime = resp.headers.get("content-type", "image/jpeg").split(";")[0]
+    return f"data:{mime};base64,{base64.b64encode(resp.content).decode()}"
+
+
 def _image_data_url(url: str) -> str:
     """Download an image and inline it as a base64 data URI.
 
-    Gemini's OpenAI-compatible endpoint does not fetch remote URLs, so the bytes
-    must be sent inline. Raises httpx.HTTPError if the image can't be fetched.
+    Raises httpx.HTTPError if the image can't be fetched.
     """
     resp = httpx.get(url, timeout=30, follow_redirects=True)
     resp.raise_for_status()
-    mime = resp.headers.get("content-type", "image/jpeg").split(";")[0]
-    data = base64.b64encode(resp.content).decode()
-    return f"data:{mime};base64,{data}"
+    return _data_url(resp)
 
 
 def build_input_text(model_input: dict) -> str:
@@ -217,22 +222,36 @@ def generate_estimate(
     return message.content, _usage(prompt_tokens, completion_tokens)
 
 
-def _photo_content(photos: list[Photo]) -> list[dict]:
+def _photo_content(photos: list[Photo]) -> tuple[list[dict], list[dict]]:
     """Vision content blocks for up to MAX_PHOTOS, inlined as base64 (Gemini
-    won't fetch remote URLs). A photo that can't be fetched is skipped; each
-    image is followed by its capture date when known."""
+    won't fetch remote URLs), plus the room-classifier prediction per photo.
+
+    A photo that can't be fetched is skipped; each image is followed by a
+    predicted room-type hint (when confident) and its capture date when known.
+    `photoIndex` counts only images actually sent, matching how the model indexes
+    them. Returns (content, predictions); predictions are recorded in Stages."""
     content: list[dict] = []
+    predictions: list[dict] = []
+    sent = 0
     for photo in photos[:MAX_PHOTOS]:
         try:
-            data_url = _image_data_url(photo.url)
+            resp = httpx.get(photo.url, timeout=30, follow_redirects=True)
+            resp.raise_for_status()
         except httpx.HTTPError:
-            continue
-        content.append({"type": "image_url", "image_url": {"url": data_url}})
+            continue  # non-fatal: skip a photo we couldn't fetch
+        content.append({"type": "image_url", "image_url": {"url": _data_url(resp)}})
+        prediction = classify(resp.content)
+        if prediction:
+            predictions.append({"photoIndex": sent, **prediction})
+            hint = format_hint(prediction)
+            if hint:
+                content.append({"type": "text", "text": hint})
         if photo.date:
             content.append(
                 {"type": "text", "text": f"The photo was taken on {photo.date}"}
             )
-    return content
+        sent += 1
+    return content, predictions
 
 
 def _chat_json(
@@ -280,12 +299,16 @@ def observe_photos(
     *,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
-) -> tuple[str, dict]:
-    """v2 Step 1: describe what's visible in each photo (no matching/pricing)."""
-    content = [{"type": "text", "text": prompt}, *_photo_content(photos)]
-    return _chat_json(
+) -> tuple[str, dict, list[dict]]:
+    """v2 Step 1: describe what's visible in each photo (no matching/pricing).
+
+    Also returns the room-classifier prediction per photo, for Stages debug."""
+    photo_blocks, predictions = _photo_content(photos)
+    content = [{"type": "text", "text": prompt}, *photo_blocks]
+    raw, usage = _chat_json(
         model, content, reasoning_effort=reasoning_effort, temperature=temperature
     )
+    return raw, usage, predictions
 
 
 def match_candidates(

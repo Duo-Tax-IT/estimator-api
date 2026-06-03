@@ -1,9 +1,13 @@
+import io
 import re
+import zipfile
+from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
 from .config import get_settings
-from .errors import RpDataFetchError
+from .errors import NoPhotosError, RpDataFetchError
 from .schemas import Photo
 
 # AU state abbreviations, for pulling the state out of a display address.
@@ -166,3 +170,30 @@ def _map_photos(items: list[dict]) -> list[Photo]:
     # Newest first; photos without a date sort last.
     photos.sort(key=lambda p: p.date or "", reverse=True)
     return photos
+
+
+def _photo_filename(index: int, photo: Photo) -> str:
+    """A stable, sortable name inside the zip: 00_<scanDate>.<ext>."""
+    ext = Path(urlparse(photo.url).path).suffix or ".jpg"
+    return f"{index:02d}_{photo.date or 'unknown'}{ext}"
+
+
+def build_photos_zip(rp_id: str) -> bytes:
+    """Fetch a property's usable photos and pack them into a zip (in-memory).
+
+    Reuses fetch_photos (same filtered/sorted set the estimator sees). An image
+    that fails to download is skipped rather than failing the whole zip.
+    """
+    photos = fetch_photos(rp_id)
+    if not photos:
+        raise NoPhotosError(f"No usable photos found for rp_id {rp_id}")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, photo in enumerate(photos):
+            try:
+                resp = httpx.get(photo.url, timeout=30)
+                resp.raise_for_status()
+            except httpx.HTTPError:
+                continue
+            zf.writestr(_photo_filename(i, photo), resp.content)
+    return buf.getvalue()

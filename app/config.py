@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     salesforce_api_url: str = "http://localhost:5172"
     salesforce_api_key: str | None = None
 
+    # In-process Places365 room classifier that hints the v2 observe step. Flip
+    # off to skip it; it also self-disables (no-op) when torch or the weights are
+    # absent, so a deploy without them still runs estimates normally.
+    room_classifier_enabled: bool = True
+    places365_weights_path: str = "app/models/places365/resnet18_places365.pth.tar"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -18,10 +18,21 @@ Rules:
 - Include a candidate ONLY when the observations name a specific visible
   fixture, fitting, material or surface that indicates renovation, replacement
   or modernisation. Apply the same bar to every item.
+- When the observation is ambiguous, obstructed, or only "unclear"/"unknown",
+  exclude the item rather than guess.
 - Exclude: landscaping (grass, soil, turf, plants), hidden/non-visible works,
   duplicates, anything excluded by `config`, and anything dated before 1992.
 - For overlapping matches, keep the single closest catalog item.
-- `estimatedYear` must be "YYYY", >= 1992 — your best visual estimate.
+- `estimatedYear` must be "YYYY", >= 1992 — your best visual estimate of when the
+  item was renovated or replaced, which must be AFTER the property's original
+  construction (`property.yearBuilt`).
+- Use each observation's `ageSignal` together with `property.yearBuilt`:
+  • old building + a "modern" finish ⇒ treat it AS a renovation, and date
+    `estimatedYear` to your best estimate of when it was modernised (after
+    `yearBuilt`), not to the build year.
+  • a "modern" finish that is merely original to a recently built dwelling is NOT
+    a renovation — exclude it.
+  • when age is genuinely unclear, exclude rather than guess.
 
 Whole-room renovations:
 - To represent a FULL renovation of a room, match that room's PARENT item (the
