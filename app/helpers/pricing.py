@@ -116,7 +116,9 @@ def price_items(
             sqm_items.append(row)
 
     used = sum(r["Quantity"] for r in sqm_items)
-    if living_space and used > living_space:
+    # Only scale down when there's positive living space to cap against; a
+    # non-positive cap would otherwise flip quantities (and costs) negative.
+    if living_space and living_space > 0 and used > living_space:
         for r in sqm_items:
             r["Quantity"] *= living_space / used
 

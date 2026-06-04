@@ -18,3 +18,9 @@ def test_no_rooms_is_all_living_space():
         "kitchen": 0,
         "livingSpace": 80,
     }
+
+
+def test_living_space_never_negative_when_rooms_exceed_floor_area():
+    # 5 bed (60) + 3 bath (18) + 1 kitchen (8) = 86 > 67 floorArea: clamp to 0,
+    # never negative (a negative living space later flips sqm costs negative).
+    assert calculate_gfa(67, bedrooms=5, bathrooms=3, kitchens=1)["livingSpace"] == 0

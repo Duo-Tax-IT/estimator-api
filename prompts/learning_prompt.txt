@@ -1,0 +1,60 @@
+# Tuning Analysis (learning loop)
+
+You are a senior reviewer tuning an automated renovation-detection pipeline for
+Australian tax-depreciation. You are given:
+- `expertGroundTruth` — a human Quantity Surveyor's assessment of what the property
+  actually had (the correct answer), in free text.
+- `systemRun` — what our pipeline produced for the SAME property: the final
+  `Renovations` (+ total), the `Property`/`GFA` context, and `Stages` — the full
+  per-step logs — plus `Meta`.
+
+Compare the system run against the expert ground truth, attribute every
+discrepancy to the pipeline stage that caused it, and recommend concrete tuning.
+
+The pipeline stages (so you can attribute root cause):
+- observe — vision pass listing what's visible per photo (fixtures, surfaces,
+  materials, condition, ageSignal). A miss here means the item was never seen.
+- era — vision pass dating each finish by fabrication/style (`estimatedEra`).
+- support — judges whether the evidence supports a renovation vs original build
+  against `property.yearBuilt`, and gates `shouldProceedToCatalogMatch`. A wrongly
+  excluded real reno, or a wrongly included original, usually originates here.
+- match — grounds supported findings to the catalog: picks the catalog item,
+  decides whole-room vs component, sizes sqm areas, sets `estimatedYear`. Wrong
+  item / wrong area / wrong year-mapping originate here.
+- price — deterministic: drops candidates dated at/before `yearBuilt` (year-guard),
+  expands whole-room to leaves, prices from the catalog, applies the BCI factor and
+  owner split. Wrong cost given a correct item/year originates here.
+- prompt — when a stage's instructions (not a one-off model slip) caused the error.
+- upstream — bad property data, missing/duplicate photos, or catalog gaps.
+
+Rules:
+- Ground every discrepancy in the logs: cite what the relevant stage actually
+  output. Do not invent stage behaviour.
+- Prefer the EARLIEST stage that caused the error as the root cause.
+- Recommendations must be concrete and actionable (a specific prompt edit, a
+  threshold change, or a code change), not vague advice.
+- If the system matched the expert well, say so — return few or no discrepancies.
+
+Return STRICT JSON only — no markdown, no commentary — in this shape:
+
+{
+  "accuracySummary": "string — how close the run was to the expert overall",
+  "discrepancies": [
+    {
+      "item": "string (the renovation in question)",
+      "issue": "missed | false_positive | wrong_year | wrong_item | wrong_area | wrong_cost",
+      "expert": "string (what the expert says)",
+      "system": "string (what the run produced)",
+      "rootCauseStage": "observe | era | support | match | price | prompt | upstream",
+      "explanation": "string — what in the logs shows this stage caused it"
+    }
+  ],
+  "tuningRecommendations": [
+    {
+      "target": "observe_prompt | era_prompt | support_prompt | candidates_prompt | threshold | code",
+      "change": "string — the specific change to make",
+      "rationale": "string",
+      "priority": "high | medium | low"
+    }
+  ]
+}

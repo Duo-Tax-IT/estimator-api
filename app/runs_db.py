@@ -31,6 +31,16 @@ def _conn() -> sqlite3.Connection:
     for col in ("address", "config", "settlement_date"):
         if col not in cols:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+    # Learning loop: an expert's ground truth + the AI's tuning analysis for a run.
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS learning_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            expert_input TEXT NOT NULL,
+            analysis TEXT NOT NULL
+        )"""
+    )
     return conn
 
 
@@ -49,6 +59,54 @@ def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, respons
                 prompt, json.dumps(response),
             ),
         )
+
+
+def get_run(run_id) -> dict | None:
+    """One saved run by id (with its full response), or None."""
+    with _conn() as conn:
+        r = conn.execute(
+            "SELECT id, created_at, rp_id, model, reasoning_effort, temperature,"
+            " label, address, config, settlement_date, prompt, response"
+            " FROM runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    if not r:
+        return None
+    return {
+        "id": r[0], "created_at": r[1], "rp_id": r[2], "model": r[3],
+        "reasoning_effort": r[4], "temperature": r[5], "label": r[6],
+        "address": r[7], "config": json.loads(r[8]) if r[8] else None,
+        "settlement_date": r[9], "prompt": r[10], "response": json.loads(r[11]),
+    }
+
+
+def save_learning(run_id, expert_input, analysis) -> int:
+    """Append one learning session (expert ground truth + AI analysis); returns id."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO learning_sessions (created_at, run_id, expert_input, analysis)"
+            " VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), run_id, expert_input,
+             json.dumps(analysis)),
+        )
+        return cur.lastrowid
+
+
+def list_learning(run_id=None) -> list[dict]:
+    """Saved learning sessions, newest first. All runs when run_id is None."""
+    where = "WHERE run_id = ?" if run_id else ""
+    params = (run_id,) if run_id else ()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, run_id, expert_input, analysis"
+            f" FROM learning_sessions {where} ORDER BY id DESC",
+            params,
+        ).fetchall()
+    return [
+        {"id": r[0], "created_at": r[1], "run_id": r[2], "expert_input": r[3],
+         "analysis": json.loads(r[4])}
+        for r in rows
+    ]
 
 
 def list_runs(rp_id=None) -> list[dict]:

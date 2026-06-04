@@ -3,9 +3,16 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
-from .errors import ItemsFetchError, ModelError, NoPhotosError, RpDataFetchError
+from .errors import (
+    ItemsFetchError,
+    MissingBuildYearError,
+    ModelError,
+    NoPhotosError,
+    RpDataFetchError,
+)
 from .estimator import build_full_estimate, preview_estimate_prompt
 from .estimator_v2 import (
     CANDIDATES_PROMPT_FILE,
@@ -19,10 +26,11 @@ from .estimator_v2 import (
     step_price,
     step_support,
 )
+from .learning import build_learning_analysis
 from .prompts import get_base_prompt
 from .clients.rpdata_client import build_photos_zip, fetch_photos, search_addresses
-from .runs_db import list_runs, save_run
-from .schemas import EstimateRequest, StepRequest
+from .runs_db import get_run, list_learning, list_runs, save_learning, save_run
+from .schemas import EstimateRequest, LearnRequest, StepRequest
 
 app = FastAPI(title="Estimator API", version="1.0.0")
 
@@ -34,6 +42,9 @@ app.add_middleware(
 )
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+# Serve extracted CSS/JS assets (e.g. /static/css/index.css, /static/js/app.js).
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 def require_secret(secret_sauce: str | None = Header(default=None)) -> None:
@@ -56,6 +67,12 @@ def index() -> FileResponse:
 def playground() -> FileResponse:
     """Serve the step-by-step v2 pipeline playground."""
     return FileResponse(_STATIC_DIR / "playground.html")
+
+
+@app.get("/learn")
+def learn_page() -> FileResponse:
+    """Serve the learning/tuning page (expert ground truth vs a saved run)."""
+    return FileResponse(_STATIC_DIR / "learn.html")
 
 
 @app.get("/health")
@@ -155,7 +172,7 @@ def _run_estimate(builder, req: EstimateRequest) -> dict:
     """Run an estimate builder, map upstream failures to HTTP, and save the run."""
     try:
         result = builder(req)
-    except NoPhotosError as exc:
+    except (NoPhotosError, MissingBuildYearError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
         # Upstream failed: megamind, calc.duo.tax, or the vision model.
@@ -180,7 +197,7 @@ def _run_step(fn, req: StepRequest) -> dict:
     """Run one playground step, mapping upstream failures to HTTP (no save)."""
     try:
         return fn(req)
-    except NoPhotosError as exc:
+    except (NoPhotosError, MissingBuildYearError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -222,3 +239,24 @@ def v2_step_price(req: StepRequest, _: None = Depends(require_secret)):
 def runs(rpId: str | None = Query(default=None)) -> dict:
     """Saved estimate runs (newest first). Omit rpId to list every property's runs."""
     return {"runs": list_runs(rpId)}
+
+
+@app.post("/learn/analyze")
+def learn_analyze(req: LearnRequest, _: None = Depends(require_secret)) -> dict:
+    """Compare a saved run against the expert's ground truth, save + return the
+    AI's tuning analysis."""
+    run = get_run(req.run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"No run with id {req.run_id}")
+    try:
+        analysis = build_learning_analysis(run, req.expert_input, req.model)
+    except ModelError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    session_id = save_learning(req.run_id, req.expert_input, analysis)
+    return {"id": session_id, "runId": req.run_id, "analysis": analysis}
+
+
+@app.get("/learn/sessions")
+def learn_sessions(runId: int | None = Query(default=None)) -> dict:
+    """Saved learning sessions (newest first). Omit runId for all."""
+    return {"sessions": list_learning(runId)}

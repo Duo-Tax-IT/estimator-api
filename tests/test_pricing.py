@@ -39,6 +39,14 @@ def test_sqm_not_capped_when_within_budget():
     assert out["renovations"][0]["Quantity"] == 10
 
 
+def test_sqm_not_scaled_when_living_space_non_positive():
+    # A negative living space (rooms exceed floorArea) must never flip a sqm item's
+    # quantity/cost negative — the cap only applies when there's positive space.
+    out = price_items([{"_id": "sqm1", "area": 12}], LIBRARY, living_space=-19)
+    assert out["renovations"][0]["Quantity"] == 12
+    assert out["total"] == 12 * 100
+
+
 def test_unknown_id_is_skipped():
     out = price_items([{"_id": "nope"}, {"_id": "each1"}], LIBRARY)
     assert len(out["renovations"]) == 1

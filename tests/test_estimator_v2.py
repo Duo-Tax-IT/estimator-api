@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app import estimator_v2
-from app.errors import ItemsFetchError, ModelError, NoPhotosError
+from app.errors import ItemsFetchError, MissingBuildYearError, ModelError, NoPhotosError
 from app.schemas import EstimateRequest, Photo
 
 SAMPLE_ITEMS = [
@@ -20,21 +20,24 @@ def _patch_upstreams(monkeypatch, items=SAMPLE_ITEMS, photos=None, property=None
     if photos is None:
         photos = [Photo(url="https://x/a", date="2024-01-01")]
     if property is None:
-        property = {"beds": "1", "propertyType": "UNIT"}
-    monkeypatch.setattr(estimator_v2, "fetch_renovation_items", lambda: items)
-    monkeypatch.setattr(estimator_v2, "fetch_photos", lambda rp_id: photos)
-    monkeypatch.setattr(estimator_v2, "fetch_property", lambda rp_id: property)
+        property = {"beds": "1", "propertyType": "UNIT", "yearBuilt": "1990"}
+    # Build fetches via estimator_v2.context; the prompt preview via estimator_v2.preview.
+    for mod in (estimator_v2.context, estimator_v2.preview):
+        monkeypatch.setattr(mod, "fetch_renovation_items", lambda: items)
+        monkeypatch.setattr(mod, "fetch_property", lambda rp_id: property)
+    monkeypatch.setattr(estimator_v2.context, "fetch_photos", lambda rp_id: photos)
     # Dedup downloads images to hash them; keep the pipeline tests offline.
-    monkeypatch.setattr(estimator_v2, "dedup_photos", lambda photos: photos)
+    monkeypatch.setattr(estimator_v2.context, "dedup_photos", lambda photos: photos)
 
 
 def _patch_stages(monkeypatch, observations, candidates, era=None, support=None):
     era = era if era is not None else {"eraAnalysis": []}
     support = support if support is not None else {"renovationSupportFindings": []}
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps(observations), {}, [], []))
-    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps(era), {}))
-    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps(support), {}))
-    monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: (json.dumps(candidates), {}))
+    # Each model call now lives in its own step module under estimator_v2.steps.
+    monkeypatch.setattr(estimator_v2.steps.observe, "observe_photos", lambda *a, **k: (json.dumps(observations), {}, [], []))
+    monkeypatch.setattr(estimator_v2.steps.era, "analyze_era", lambda *a, **k: (json.dumps(era), {}))
+    monkeypatch.setattr(estimator_v2.steps.support, "assess_support", lambda *a, **k: (json.dumps(support), {}))
+    monkeypatch.setattr(estimator_v2.steps.match, "match_candidates", lambda *a, **k: (json.dumps(candidates), {}))
 
 
 def test_v2_shape_matches_v1_prices_from_library_and_keeps_stages(monkeypatch):
@@ -62,7 +65,7 @@ def test_v2_shape_matches_v1_prices_from_library_and_keeps_stages(monkeypatch):
     assert out["Renovations"][0]["parentName"] == "Cooling"
     assert out["Summary Description"] == "Detected split system AC."
     assert out["Disclaimer"].startswith("This assessment is based solely")
-    assert out["Property"] == {"beds": "1", "propertyType": "UNIT"}
+    assert out["Property"] == {"beds": "1", "propertyType": "UNIT", "yearBuilt": "1990"}
     # Per-stage debug payload is carried through.
     assert out["Stages"]["observations"] == observations
     assert out["Stages"]["eraAnalysis"] == {"eraAnalysis": []}
@@ -104,7 +107,7 @@ def test_v2_room_scaling_doubles_bathroom_total_when_enabled(monkeypatch):
          "defaultQuantity": 1, "parentId": "b", "parentName": "Bathroom"},
     ]
     _patch_upstreams(monkeypatch, items=items,
-                     property={"baths": "2", "propertyType": "HOUSE"})
+                     property={"baths": "2", "propertyType": "HOUSE", "yearBuilt": "1990"})
     candidates = {
         "validatedCandidates": [
             {"_id": "b", "name": "Bathroom", "unit": "item", "estimatedYear": "2021",
@@ -131,7 +134,8 @@ def test_v2_manual_room_scale_doubles_total(monkeypatch):
         {"_id": "t", "name": "Toilet", "defaultRate": 1000, "unit": "item",
          "defaultQuantity": 1, "parentId": "b", "parentName": "Bathroom"},
     ]
-    _patch_upstreams(monkeypatch, items=items, property={"propertyType": "HOUSE"})
+    _patch_upstreams(monkeypatch, items=items,
+                     property={"propertyType": "HOUSE", "yearBuilt": "1990"})
     candidates = {
         "validatedCandidates": [
             {"_id": "b", "name": "Bathroom", "unit": "item", "estimatedYear": "2021",
@@ -153,7 +157,7 @@ def test_v2_sqm_areaForTool_maps_to_area_and_caps_to_living_space(monkeypatch):
               "defaultQuantity": None, "parentName": None}]
     # floorArea 86 − (2 beds·12 + 1 bath·6 + 1 kitchen·8 = 38) → livingSpace 48.
     _patch_upstreams(monkeypatch, items=items,
-                     property={"floorArea": 86, "beds": "2", "baths": "1"})
+                     property={"floorArea": 86, "beds": "2", "baths": "1", "yearBuilt": "1990"})
     candidates = {
         "validatedCandidates": [
             {"_id": "f1", "name": "Flooring", "unit": "sqm",
@@ -181,9 +185,9 @@ def test_v2_only_supported_findings_reach_match_payload_and_splits_owner(monkeyp
     ]}
     captured = {}
 
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps({"photoObservations": []}), {}, [], []))
-    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
-    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps(support), {}))
+    monkeypatch.setattr(estimator_v2.steps.observe, "observe_photos", lambda *a, **k: (json.dumps({"photoObservations": []}), {}, [], []))
+    monkeypatch.setattr(estimator_v2.steps.era, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.support, "assess_support", lambda *a, **k: (json.dumps(support), {}))
 
     def fake_match(model, prompt, payload, **kwargs):
         captured["payload"] = payload
@@ -195,7 +199,7 @@ def test_v2_only_supported_findings_reach_match_payload_and_splits_owner(monkeyp
             "rejectedCandidates": [], "summary": "",
         }), {}
 
-    monkeypatch.setattr(estimator_v2, "match_candidates", fake_match)
+    monkeypatch.setattr(estimator_v2.steps.match, "match_candidates", fake_match)
 
     out = estimator_v2.build_estimate_v2(_req(settlementDate="2010-01-01"))
     # The Python gate drops shouldProceedToCatalogMatch=false; only the supported
@@ -273,7 +277,7 @@ def test_v2_prompt_preview_includes_both_stage_prompts(monkeypatch):
             return "SUP_TPL"
         return "CAND_TPL"
 
-    monkeypatch.setattr(estimator_v2, "get_base_prompt", fake_prompt)
+    monkeypatch.setattr(estimator_v2.preview, "get_base_prompt", fake_prompt)
     out = estimator_v2.preview_estimate_prompt_v2(_req())
     assert "STEP 1 — OBSERVATION" in out and "OBS_TPL" in out
     assert "STEP 1b — ERA ANALYSIS" in out and "ERA_TPL" in out
@@ -286,21 +290,21 @@ def test_v2_prompt_preview_includes_both_stage_prompts(monkeypatch):
 
 def test_v2_bad_observation_json_raises(monkeypatch):
     _patch_upstreams(monkeypatch)
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: ("not json", {}, [], []))
-    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
-    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
-    monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: ("{}", {}))
+    monkeypatch.setattr(estimator_v2.steps.observe, "observe_photos", lambda *a, **k: ("not json", {}, [], []))
+    monkeypatch.setattr(estimator_v2.steps.era, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.support, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.match, "match_candidates", lambda *a, **k: ("{}", {}))
     with pytest.raises(ModelError):
         estimator_v2.build_estimate_v2(_req())
 
 
 def test_v2_bad_candidate_json_raises(monkeypatch):
     _patch_upstreams(monkeypatch)
-    monkeypatch.setattr(estimator_v2, "observe_photos",
+    monkeypatch.setattr(estimator_v2.steps.observe, "observe_photos",
                         lambda *a, **k: (json.dumps({"photoObservations": []}), {}, [], []))
-    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
-    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
-    monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: ("not json", {}))
+    monkeypatch.setattr(estimator_v2.steps.era, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.support, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.match, "match_candidates", lambda *a, **k: ("not json", {}))
     with pytest.raises(ModelError):
         estimator_v2.build_estimate_v2(_req())
 
@@ -315,3 +319,75 @@ def test_v2_no_photos_raises(monkeypatch):
     _patch_upstreams(monkeypatch, photos=[])
     with pytest.raises(NoPhotosError):
         estimator_v2.build_estimate_v2(_req())
+
+
+def test_v2_requires_build_year_when_context_and_request_lack_it(monkeypatch):
+    # Property has no yearBuilt and no buildYear supplied -> hard error.
+    _patch_upstreams(monkeypatch, property={"propertyType": "UNIT"})
+    with pytest.raises(MissingBuildYearError):
+        estimator_v2.build_estimate_v2(_req())
+
+
+def test_step_context_surfaces_missing_build_year_without_erroring(monkeypatch):
+    # Step 0 is the diagnostic fetch: it must NOT require a build year.
+    _patch_upstreams(monkeypatch, property={"propertyType": "UNIT"})
+    out = estimator_v2.step_context(_req())
+    assert out["property"] == {"propertyType": "UNIT"}
+
+
+def test_step_observe_requires_build_year(monkeypatch):
+    # The gate kicks in from observe on.
+    _patch_upstreams(monkeypatch, property={"propertyType": "UNIT"})
+    with pytest.raises(MissingBuildYearError):
+        estimator_v2.step_observe(_req())
+
+
+def test_photos_override_is_used_and_skips_fetch(monkeypatch):
+    # Dev/testing: a request's `photos` are sent as-is; rpdata fetch is never hit.
+    ctx_mod = estimator_v2.context
+    monkeypatch.setattr(ctx_mod, "fetch_renovation_items", lambda: SAMPLE_ITEMS)
+    monkeypatch.setattr(ctx_mod, "fetch_photos",
+                        lambda rp_id: pytest.fail("fetch_photos should not be called"))
+    req = _req(property={"propertyType": "UNIT", "yearBuilt": "1990"},
+              photos=[{"url": "https://x/keep", "date": None}])
+    ctx = ctx_mod.fetch_v2_context(req)
+    assert [p.url for p in ctx["photos"]] == ["https://x/keep"]
+
+
+def test_v2_build_year_fills_property_when_context_missing_it(monkeypatch):
+    # buildYear fills the missing yearBuilt; the year-guard then uses it, dropping
+    # the 2000 candidate as original build (estimatedYear <= yearBuilt 2010).
+    _patch_upstreams(monkeypatch, property={"propertyType": "UNIT"})
+    candidates = {"validatedCandidates": [
+        {"_id": "a1", "name": "Split System AC", "unit": "each",
+         "estimatedYear": "2000", "areaForTool": None, "evidence": []},
+    ], "rejectedCandidates": [], "summary": ""}
+    _patch_stages(monkeypatch, {"photoObservations": []}, candidates)
+
+    out = estimator_v2.build_estimate_v2(_req(buildYear=2010))
+    assert out["Property"]["yearBuilt"] == 2010
+    assert out["Renovations"] == []  # dropped by the year-guard using the filled year
+
+
+# ── Internal-repaint assumption (now on by default) ──
+_PAINT_LIB = {"p": {"_id": "p", "name": "Painting - Internal", "defaultRate": 55,
+                    "unit": "sqm", "parentId": None, "parentName": None}}
+_FRESH_PAINT = {"photoObservations": [{"roomType": "living", "condition": "clean"}]}
+_GFA = {"livingSpace": 40, "bedroom": 0, "bathroom": 0, "kitchen": 0}
+
+
+def test_internal_paint_applies_by_default_when_conditions_met():
+    # No config: the repaint assumption now fires (age >= 10 + fresh paint seen),
+    # sized from the gfa living-space area.
+    row, decision = estimator_v2._internal_paint_row(
+        [], _FRESH_PAINT, {"yearBuilt": "2000"}, {}, _GFA, _PAINT_LIB
+    )
+    assert decision["applied"] is True
+    assert row["_id"] == "p" and row["area"] == 40.0
+
+
+def test_internal_paint_can_still_be_disabled_explicitly():
+    _, decision = estimator_v2._internal_paint_row(
+        [], _FRESH_PAINT, {"yearBuilt": "2000"}, {"assumeInternalRepaint": False}, _GFA, _PAINT_LIB
+    )
+    assert decision == {"applied": False, "reason": "disabled"}

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Learning — tune from expert feedback</title>
+  <style>
+    :root { --line: #e2e2e2; --muted: #6b7280; --accent: #2563eb; }
+    * { box-sizing: border-box; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; color: #111; }
+    header { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: baseline; }
+    header h1 { font-size: 16px; margin: 0; }
+    header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+    select, input, textarea { width: 100%; font-family: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+    textarea { font-family: ui-monospace, monospace; resize: vertical; }
+    .controls { display: grid; grid-template-columns: 2fr 1fr; gap: 10px 16px; margin-bottom: 18px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    /* Let grid columns shrink below content width so wide <pre> wraps instead of
+       scrolling the whole page sideways. */
+    .cols > div { min-width: 0; }
+    .card { border: 1px solid var(--line); border-radius: 8px; }
+    .card > .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+    .card > .head h2 { font-size: 14px; margin: 0; flex: 1; }
+    .card > .body { padding: 12px 14px; }
+    button { font: inherit; padding: 6px 14px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    .status { font-size: 12px; color: var(--muted); }
+    .status.err { color: #dc2626; }
+    pre { background: #fafafa; border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; max-height: 70vh; margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .hint { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+    .logtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .logtabs button { font-size: 12px; padding: 3px 9px; border: 1px solid var(--line); background: #fff; color: #374151; border-radius: 999px; cursor: pointer; }
+    .logtabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .carousel .stage { position: relative; display: flex; align-items: center; justify-content: center; background: #fafafa; border: 1px solid var(--line); border-radius: 6px; }
+    .carousel .stage img { max-width: 100%; max-height: 52vh; object-fit: contain; display: block; }
+    .carousel .nav { position: absolute; top: 50%; transform: translateY(-50%); border: 1px solid var(--line); background: rgba(255,255,255,.85); color: #111; width: 32px; height: 32px; border-radius: 999px; font-size: 18px; line-height: 1; padding: 0; cursor: pointer; }
+    .carousel .nav.prev { left: 8px; } .carousel .nav.next { right: 8px; }
+    .carousel .caption { font-size: 12px; color: var(--muted); margin: 6px 0; text-align: center; }
+    .carousel .thumbs { display: flex; gap: 6px; overflow-x: auto; }
+    .carousel .thumbs img { width: 64px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); cursor: pointer; opacity: .55; }
+    .carousel .thumbs img.active { opacity: 1; border-color: var(--accent); }
+    .disc, .rec { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+    .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); margin-right: 6px; color: var(--muted); }
+    .badge.high { color: #b91c1c; border-color: #f0c9c9; }
+    .badge.stage { color: var(--accent); border-color: #c9d8f0; }
+    .disc b, .rec b { font-size: 13px; }
+    .kv { font-size: 12px; color: #374151; margin-top: 3px; }
+    .kv .k { color: var(--muted); }
+    .sessions details { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; font-size: 12px; }
+    .summary { font-size: 13px; margin: 0 0 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Learning — tune from expert feedback</h1>
+    <a href="/">← estimator</a>
+    <a href="/playground">playground →</a>
+  </header>
+
+  <main>
+    <div class="controls">
+      <div>
+        <label>Pick a saved run</label>
+        <select id="runSelect"><option value="">Loading runs…</option></select>
+      </div>
+      <div>
+        <label>secret-sauce header (optional)</label>
+        <input id="secret" placeholder="leave blank for local dev" />
+      </div>
+    </div>
+
+    <div class="cols">
+      <!-- Left: write the expert notes, with the run logs below for reference -->
+      <div>
+        <section class="card" style="margin-bottom:18px">
+          <div class="head"><h2>Expert ground truth</h2>
+            <span class="status" id="analyzeStatus"></span>
+            <button id="analyzeBtn" disabled>Analyze</button></div>
+          <div class="body">
+            <p class="hint">Paste the QS's assessment of what this property actually had (items, rooms, years). The photos are on the right.</p>
+            <textarea id="expert" rows="12" placeholder="e.g. Full bathroom renovation ~2018 (new vanity, frameless screen, floor + wall tiles). Kitchen original. Split system to living added ~2020."></textarea>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="head"><h2>Run logs</h2><span class="status" id="runMeta"></span></div>
+          <div class="body">
+            <p class="hint">Pick a section to inspect — the per-stage logs the AI compares against.</p>
+            <div class="logtabs" id="logTabs"></div>
+            <pre id="runLogs">Select a run above.</pre>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right: photos (aligned with the notes box) + analysis + sessions -->
+      <div>
+        <section class="card" style="margin-bottom:18px">
+          <div class="head"><h2>Photo preview</h2><span class="status" id="photoMeta"></span></div>
+          <div class="body">
+            <p class="hint">Flip through the property's photos while writing the notes on the left.</p>
+            <div class="carousel" id="carousel" hidden>
+              <div class="stage">
+                <button class="nav prev" id="prevBtn" type="button" aria-label="Previous">‹</button>
+                <a id="previewLink" href="#" target="_blank" rel="noopener"><img id="previewImg" alt="property photo" /></a>
+                <button class="nav next" id="nextBtn" type="button" aria-label="Next">›</button>
+              </div>
+              <div class="caption" id="caption"></div>
+              <div class="thumbs" id="thumbs"></div>
+            </div>
+            <p class="hint" id="photoHint">Select a run to load its photos.</p>
+          </div>
+        </section>
+
+        <section class="card" style="margin-bottom:18px">
+          <div class="head"><h2>Tuning analysis</h2></div>
+          <div class="body" id="analysis"><p class="hint">Run an analysis to see discrepancies and tuning recommendations.</p></div>
+        </section>
+
+        <section class="card">
+          <div class="head"><h2>Past sessions</h2></div>
+          <div class="body sessions" id="sessions"><p class="hint">None yet for this run.</p></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const runsById = {};
+    let selectedRun = null;
+
+    const headers = () => {
+      const h = { "Content-Type": "application/json" };
+      const s = $("secret").value.trim();
+      if (s) h["secret-sauce"] = s;
+      return h;
+    };
+
+    async function getJSON(path) {
+      const r = await fetch(path, { headers: headers() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || `${r.status} ${r.statusText}`);
+      return d;
+    }
+
+    async function loadRuns() {
+      try {
+        const { runs } = await getJSON("/runs");
+        const sel = $("runSelect");
+        if (!runs.length) { sel.innerHTML = '<option value="">No saved runs yet</option>'; return; }
+        sel.innerHTML = '<option value="">— pick a run —</option>' + runs.map((r) => {
+          runsById[r.id] = r;
+          const total = (r.response && r.response["Renovations Total"]) || "";
+          const who = r.address || r.rp_id;
+          return `<option value="${r.id}">#${r.id} · ${who} · ${r.label || "—"} · ${total}</option>`;
+        }).join("");
+      } catch (e) { $("runSelect").innerHTML = `<option value="">${e.message}</option>`; }
+    }
+
+    // A section is shown only when it has content (skips empty stages).
+    const hasContent = (d) =>
+      d != null && d !== "" &&
+      !(Array.isArray(d) && d.length === 0) &&
+      !(typeof d === "object" && !Array.isArray(d) && Object.values(d).every((v) => v == null));
+
+    function logSections(resp) {
+      const st = resp.Stages || {};
+      const defs = [
+        ["Renovations", { Renovations: resp.Renovations, "Renovations Total": resp["Renovations Total"] }],
+        ["Summary (AI)", resp["Summary Description"]],
+        ["Observe (1)", st.observations],
+        ["Era (1b)", st.eraAnalysis],
+        ["Support (1.5)", st.renovationSupport],
+        ["Match (2)", st.candidates],
+        ["Pricing (3)", { toolInput: st.toolInput, bci: st.bci, roomScaling: st.roomScaling, paintAssumption: st.paintAssumption }],
+        ["Room hints", st.roomHints],
+        ["Photos", st.photos],
+        ["Property / GFA", { Property: resp.Property, GFA: resp.GFA }],
+        ["Meta", resp.Meta],
+      ];
+      return defs.filter(([, d]) => hasContent(d));
+    }
+
+    let sections = [];
+
+    function showSection(i) {
+      $("logTabs").querySelectorAll("button").forEach((b, j) => b.classList.toggle("active", j === i));
+      if (!sections.length) { $("runLogs").textContent = "No logs."; return; }
+      const data = sections[i][1];
+      $("runLogs").textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }
+
+    function renderLogs(resp) {
+      sections = logSections(resp);
+      $("logTabs").innerHTML = sections.map(([label], i) => `<button data-i="${i}">${label}</button>`).join("");
+      $("logTabs").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => showSection(+b.dataset.i)));
+      showSection(0);
+    }
+
+    function selectRun(id) {
+      selectedRun = runsById[id] || null;
+      $("analyzeBtn").disabled = !selectedRun;
+      $("analysis").innerHTML = '<p class="hint">Run an analysis to see discrepancies and tuning recommendations.</p>';
+      if (!selectedRun) {
+        $("runLogs").textContent = "Select a run above."; $("runMeta").textContent = "";
+        $("logTabs").innerHTML = ""; $("sessions").innerHTML = "";
+        $("carousel").hidden = true; $("photoHint").hidden = false;
+        $("photoHint").textContent = "Select a run to load its photos."; $("photoMeta").textContent = "";
+        return;
+      }
+      const resp = selectedRun.response || {};
+      $("runMeta").textContent = `${selectedRun.model || ""} · ${selectedRun.created_at || ""}`;
+      renderLogs(resp);
+      loadPhotos(selectedRun.rp_id);
+      loadSessions(id);
+    }
+
+    const carousel = { photos: [], i: 0 };
+
+    function renderPreview() {
+      const ps = carousel.photos;
+      if (!ps.length) return;
+      const p = ps[carousel.i];
+      $("previewImg").src = p.url;
+      $("previewLink").href = p.url;
+      $("caption").textContent = `${carousel.i + 1} / ${ps.length}${p.date ? " · " + p.date : ""}`;
+      $("thumbs").querySelectorAll("img").forEach((t, j) => t.classList.toggle("active", j === carousel.i));
+    }
+
+    function move(d) {
+      if (!carousel.photos.length) return;
+      carousel.i = (carousel.i + d + carousel.photos.length) % carousel.photos.length;
+      renderPreview();
+    }
+
+    async function loadPhotos(rpId) {
+      $("carousel").hidden = true; $("photoHint").hidden = false;
+      $("photoHint").textContent = "Loading photos…"; $("photoMeta").textContent = "";
+      try {
+        const { photos } = await getJSON(`/photos?rpId=${encodeURIComponent(rpId)}`);
+        if (!photos.length) { $("photoHint").textContent = "No photos for this property."; return; }
+        carousel.photos = photos; carousel.i = 0;
+        $("photoMeta").textContent = `${photos.length} photos`;
+        $("thumbs").innerHTML = photos.map((p, j) => `<img data-i="${j}" src="${p.url}" loading="lazy" alt="" />`).join("");
+        $("thumbs").querySelectorAll("img").forEach((t) =>
+          t.addEventListener("click", () => { carousel.i = +t.dataset.i; renderPreview(); }));
+        $("photoHint").hidden = true; $("carousel").hidden = false;
+        renderPreview();
+      } catch (e) { $("photoHint").textContent = e.message; }
+    }
+
+    function badge(text, cls = "") { return `<span class="badge ${cls}">${text}</span>`; }
+
+    function renderAnalysis(a) {
+      const discs = (a.discrepancies || []).map((d) => `
+        <div class="disc">${badge(d.issue || "issue")}${badge(d.rootCauseStage || "?", "stage")}<b>${d.item || ""}</b>
+          <div class="kv"><span class="k">expert:</span> ${d.expert || ""}</div>
+          <div class="kv"><span class="k">system:</span> ${d.system || ""}</div>
+          <div class="kv">${d.explanation || ""}</div></div>`).join("") || '<p class="hint">No discrepancies.</p>';
+      const recs = (a.tuningRecommendations || []).map((r) => `
+        <div class="rec">${badge(r.priority || "", r.priority === "high" ? "high" : "")}${badge(r.target || "", "stage")}
+          <b>${r.change || ""}</b><div class="kv">${r.rationale || ""}</div></div>`).join("") || '<p class="hint">No recommendations.</p>';
+      $("analysis").innerHTML =
+        `<p class="summary">${a.accuracySummary || ""}</p>` +
+        `<label>Discrepancies</label>${discs}<label style="margin-top:10px">Recommendations</label>${recs}`;
+    }
+
+    async function analyze() {
+      if (!selectedRun) return;
+      const expert = $("expert").value.trim();
+      if (!expert) { $("analyzeStatus").textContent = "enter expert notes first"; return; }
+      $("analyzeStatus").className = "status"; $("analyzeStatus").textContent = "analyzing…";
+      try {
+        const r = await fetch("/learn/analyze", {
+          method: "POST", headers: headers(),
+          body: JSON.stringify({ runId: selectedRun.id, expertInput: expert }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || `${r.status} ${r.statusText}`);
+        renderAnalysis(d.analysis);
+        $("analyzeStatus").textContent = "done";
+        loadSessions(selectedRun.id);
+      } catch (e) { $("analyzeStatus").className = "status err"; $("analyzeStatus").textContent = e.message; }
+    }
+
+    async function loadSessions(runId) {
+      try {
+        const { sessions } = await getJSON(`/learn/sessions?runId=${encodeURIComponent(runId)}`);
+        $("sessions").innerHTML = sessions.length ? sessions.map((s) => `
+          <details><summary>#${s.id} · ${s.created_at} · ${(s.analysis.discrepancies || []).length} discrepancies</summary>
+            <div class="kv"><span class="k">expert:</span> ${s.expert_input}</div>
+            <pre style="margin-top:6px">${JSON.stringify(s.analysis, null, 2)}</pre></details>`).join("")
+          : '<p class="hint">None yet for this run.</p>';
+      } catch { /* sessions are best-effort */ }
+    }
+
+    $("runSelect").addEventListener("change", (e) => selectRun(e.target.value));
+    $("analyzeBtn").addEventListener("click", analyze);
+    $("prevBtn").addEventListener("click", () => move(-1));
+    $("nextBtn").addEventListener("click", () => move(1));
+    loadRuns();
+  </script>
+</body>
+</html>

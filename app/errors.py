@@ -22,5 +22,10 @@ class NoPhotosError(EstimatorError):
     """No usable photos were found for the given rp_id."""
 
 
+class MissingBuildYearError(EstimatorError):
+    """The property has no build year and none was supplied via `buildYear`.
+    yearBuilt is required for the year-guard and the paint age gate."""
+
+
 class ModelError(EstimatorError):
     """The vision model call failed or returned output we could not parse."""

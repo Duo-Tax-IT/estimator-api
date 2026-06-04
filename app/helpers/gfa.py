@@ -15,7 +15,10 @@ def calculate_gfa(
         "bathroom": bathrooms * SQM_PER_ROOM["bathroom"],
         "kitchen": kitchens * SQM_PER_ROOM["kitchen"],
     }
-    rooms["livingSpace"] = property_gfa - sum(rooms.values())
+    # Clamp at 0: when the counted rooms already exceed the floor area (small or
+    # bad floorArea vs many rooms), there's no leftover living space — and a
+    # negative value would later flip sqm costs negative in price_items.
+    rooms["livingSpace"] = max(property_gfa - sum(rooms.values()), 0)
     return rooms
 
 

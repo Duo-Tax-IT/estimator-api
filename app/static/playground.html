@@ -36,8 +36,28 @@
     .thumbs figure { margin: 0; width: 110px; }
     .thumbs img { width: 110px; height: 80px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
     .thumbs figcaption { font-size: 11px; color: var(--muted); }
+    .pickbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+    .pickbar button { font-size: 12px; padding: 3px 8px; }
+    .picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .pick { margin: 0; width: 110px; cursor: pointer; display: block; position: relative; }
+    .pick img { width: 110px; height: 80px; object-fit: cover; border-radius: 4px; border: 2px solid var(--line); opacity: .45; transition: opacity .1s, border-color .1s; }
+    .pick.on img { border-color: var(--accent); opacity: 1; }
+    .pick input { position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; }
+    .pick span { display: block; font-size: 11px; color: var(--muted); }
     .total { font-size: 15px; font-weight: 600; margin: 8px 0 0; }
     .hint { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+    .findings { display: flex; flex-direction: column; gap: 8px; }
+    .finding { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+    .ftop { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; }
+    .badge { font-size: 11px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; color: #374151; text-transform: capitalize; }
+    .badge.ok { color: #15803d; border-color: #bfe3c7; }
+    .badge.no { color: #b91c1c; border-color: #f0c9c9; }
+    .gate { margin-left: auto; font-size: 11px; color: var(--muted); }
+    .gate.on { color: var(--accent); }
+    .fitem { font-weight: 600; font-size: 13px; }
+    .fbasis { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: #374151; }
+    .flim { margin-top: 5px; font-size: 12px; color: #92400e; }
+    .flim .k { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -59,7 +79,9 @@
         <textarea id="config" rows="2" placeholder='{ "assumeInternalRepaint": true }'></textarea>
       </div>
       <div>
-        <label>settlement date (YYYY-MM-DD, optional)</label>
+        <label>build year (required if the property has none)</label>
+        <input id="buildYear" type="number" placeholder="e.g. 1995" />
+        <label style="margin-top:8px">settlement date (YYYY-MM-DD, optional)</label>
         <input id="settlement" placeholder="2010-01-01" />
         <label style="margin-top:8px">secret-sauce header (optional)</label>
         <input id="secret" placeholder="leave blank for local dev" />
@@ -71,7 +93,14 @@
       <div class="head"><span class="step-no">0</span><h2>Context — upstream fetch</h2>
         <span class="status" id="s-context"></span>
         <button data-run="context">Run</button></div>
-      <div class="body"><p class="hint">Property, GFA, photo count and trimmed catalog the pipeline starts from.</p>
+      <div class="body"><p class="hint">Property, GFA, photo count and trimmed catalog the pipeline starts from. Pick which photos are sent to the AI (Observe/Era) — first 20 are pre-selected.</p>
+        <div class="pickbar" id="pickbar" hidden>
+          <strong id="pickcount"></strong>
+          <button type="button" data-pick="20">First 20</button>
+          <button type="button" data-pick="all">All</button>
+          <button type="button" data-pick="none">None</button>
+        </div>
+        <div class="picker" id="picker"></div>
         <pre id="o-context" hidden></pre></div>
     </section>
 
@@ -105,7 +134,7 @@
         <textarea id="in-obs" rows="5">{"photoObservations": []}</textarea>
         <label style="margin-top:8px">eraAnalysis</label>
         <textarea id="in-era" rows="5">{"eraAnalysis": []}</textarea>
-        <pre id="o-support" hidden></pre></div>
+        <div id="o-support" class="findings" hidden></div></div>
     </section>
 
     <!-- Step 2 -->
@@ -138,6 +167,32 @@
     const $ = (id) => document.getElementById(id);
     const picked = { rpId: null, address: null };
 
+    const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+    // Render Step 1.5 renovationSupportFindings as organised cards (not a JSON dump).
+    function renderFindings(support) {
+      const findings = (support && support.renovationSupportFindings) || [];
+      if (!findings.length) return '<p class="hint">No findings.</p>';
+      return findings.map((f) => {
+        const statusCls = f.supportStatus === "supported" ? "ok" : (f.supportStatus === "unsupported" ? "no" : "");
+        const basis = (f.supportBasis || []).map((b) => `<li>${esc(b)}</li>`).join("");
+        const lim = (f.limitations && f.limitations.length)
+          ? `<div class="flim"><span class="k">Limitations:</span> ${esc(f.limitations.join("; "))}</div>` : "";
+        return `<div class="finding">
+          <div class="ftop">
+            <span class="badge">${esc(f.roomType || "?")}</span>
+            <span class="badge ${statusCls}">${esc(f.supportStatus || "")}</span>
+            <span class="badge">${esc(f.supportStrength || "")}</span>
+            <span class="badge">${esc(f.estimatedRenovationYear || "—")}</span>
+            <span class="gate ${f.shouldProceedToCatalogMatch ? "on" : ""}">${f.shouldProceedToCatalogMatch ? "→ match" : "gated"}</span>
+          </div>
+          <div class="fitem">${esc(f.observedItem || "")}</div>
+          ${basis ? `<ul class="fbasis">${basis}</ul>` : ""}
+          ${lim}
+        </div>`;
+      }).join("");
+    }
+
     function headers() {
       const h = { "Content-Type": "application/json" };
       const secret = $("secret").value.trim();
@@ -153,8 +208,45 @@
       if (cfg) body.config = JSON.parse(cfg);
       const settle = $("settlement").value.trim();
       if (settle) body.settlementDate = settle;
+      const by = $("buildYear").value.trim();
+      if (by) body.buildYear = Number(by);
+      const sel = selectedPhotos();
+      if (sel.length) body.photos = sel;   // dev: only send the picked subset
       return body;
     }
+
+    // ── Photo picker: choose which photos go to the AI (Observe/Era) ──
+    let allPhotos = [];
+    const selected = new Set();   // selected photo urls
+
+    const selectedPhotos = () =>
+      allPhotos.filter((p) => selected.has(p.url)).map((p) => ({ url: p.url, date: p.date ?? null }));
+
+    function renderPicker() {
+      $("pickbar").hidden = allPhotos.length === 0;
+      $("pickcount").textContent = `${selected.size} / ${allPhotos.length} selected`;
+      $("picker").innerHTML = allPhotos.map((p, i) => {
+        const on = selected.has(p.url);
+        return `<label class="pick ${on ? "on" : ""}"><input type="checkbox" data-url="${p.url}" ${on ? "checked" : ""}/>`
+          + `<img src="${p.url}" loading="lazy" /><span>#${i}${p.date ? " · " + p.date : ""}</span></label>`;
+      }).join("");
+    }
+
+    $("picker").addEventListener("change", (e) => {
+      const url = e.target.dataset.url;
+      if (!url) return;
+      e.target.checked ? selected.add(url) : selected.delete(url);
+      renderPicker();
+    });
+
+    $("pickbar").addEventListener("click", (e) => {
+      const mode = e.target.dataset.pick;
+      if (!mode) return;
+      selected.clear();
+      if (mode === "all") allPhotos.forEach((p) => selected.add(p.url));
+      else if (mode === "20") allPhotos.slice(0, 20).forEach((p) => selected.add(p.url));
+      renderPicker();
+    });
 
     async function post(path, body) {
       const resp = await fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body) });
@@ -178,7 +270,16 @@
     }
 
     const steps = {
-      context: () => post("/estimate/v2/step/context", base()).then((d) => show("o-context", d)),
+      context: () => {
+        const b = base(); delete b.photos;   // always fetch the FULL set to pick from
+        return post("/estimate/v2/step/context", b).then((d) => {
+          show("o-context", d);
+          allPhotos = d.photos || [];
+          selected.clear();
+          allPhotos.slice(0, 20).forEach((p) => selected.add(p.url));   // default: first 20
+          renderPicker();
+        });
+      },
 
       observe: () => post("/estimate/v2/step/observe", base()).then((d) => {
         show("o-observe", d.observations);
@@ -196,8 +297,9 @@
       support: () => {
         const body = { ...base(), observations: JSON.parse($("in-obs").value), era: JSON.parse($("in-era").value) };
         return post("/estimate/v2/step/support", body).then((d) => {
-          show("o-support", d.renovationSupport);
-          $("in-support").value = JSON.stringify(d.renovationSupport);   // auto-fill Match
+          const el = $("o-support"); el.hidden = false;
+          el.innerHTML = renderFindings(d.renovationSupport);          // organised cards
+          $("in-support").value = JSON.stringify(d.renovationSupport); // raw JSON still feeds Match (editable)
         });
       },
 

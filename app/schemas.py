@@ -40,6 +40,24 @@ class EstimateRequest(BaseModel):
     # Settlement date (YYYY-MM-DD), e.g. from Salesforce Opportunity
     # Settlement_Date__c. Renovations dated before it are the previous owner's.
     settlement_date: str | None = Field(default=None, alias="settlementDate")
+    # Build-year fallback: filled into the property's `yearBuilt` when rpdata has
+    # none. Required (no property year + no buildYear → MissingBuildYearError),
+    # because the year-guard and paint age gate depend on it.
+    build_year: int | None = Field(default=None, alias="buildYear")
+    # Dev/testing override: when set, these exact photos are sent to the model
+    # instead of fetching + dedup + cap (lets the playground pick a small subset
+    # so a run isn't 100 photos). Omitted → normal fetch.
+    photos: list[Photo] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class LearnRequest(BaseModel):
+    """A learning-loop request: compare run `runId` against the expert's text."""
+
+    run_id: int = Field(alias="runId")
+    expert_input: str = Field(alias="expertInput", min_length=1)
+    model: str | None = None
 
     model_config = {"populate_by_name": True}
 

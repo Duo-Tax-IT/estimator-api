@@ -27,9 +27,10 @@ MAX_PHOTOS = 100
 MAX_OUTPUT_TOKENS = 65536
 
 # Photos per vision request. A large set (up to MAX_PHOTOS) is split across calls
-# so each call's JSON — one verbose entry per photo — stays well under
-# MAX_OUTPUT_TOKENS; the results are merged with a single global photoIndex.
-PHOTO_BATCH = 40
+# so each call's output — one verbose entry per photo PLUS the model's thinking —
+# stays well under MAX_OUTPUT_TOKENS; results are merged with a global photoIndex.
+# Kept small so most of the cap is free for reasoning, not just the JSON.
+PHOTO_BATCH = 20
 
 # gemini-3.5-flash standard pricing, USD per 1M tokens (output includes thinking).
 # Source: https://ai.google.dev/gemini-api/docs/pricing
@@ -37,12 +38,22 @@ _INPUT_USD_PER_1M = 1.50
 _OUTPUT_USD_PER_1M = 9.00
 
 
-def _usage(prompt_tokens: int, completion_tokens: int) -> dict:
+def _reasoning_tokens(usage) -> int:
+    """Thinking tokens, when the endpoint reports them. A SUBSET of
+    completion_tokens (already in cost) — captured only for benchmarking. 0 when
+    the endpoint doesn't break it out."""
+    details = getattr(usage, "completion_tokens_details", None)
+    return getattr(details, "reasoning_tokens", 0) or 0
+
+
+def _usage(prompt_tokens: int, completion_tokens: int, reasoning_tokens: int = 0) -> dict:
     """Token counts + USD cost for a call; also logs one line to stdout."""
     cost = (prompt_tokens * _INPUT_USD_PER_1M + completion_tokens * _OUTPUT_USD_PER_1M) / 1_000_000
     summary = {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        # Of the completion tokens, how many were thinking (not JSON) — for benchmarking.
+        "reasoning_tokens": reasoning_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
         "cost": round(cost, 4),
     }
@@ -52,7 +63,8 @@ def _usage(prompt_tokens: int, completion_tokens: int) -> dict:
 
 def merge_usage(*summaries: dict) -> dict:
     """Sum several usage summaries (multi-call pipelines) into one."""
-    total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost": 0.0}
+    total = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
+             "total_tokens": 0, "cost": 0.0}
     for s in summaries:
         for k in total:
             total[k] += s.get(k, 0)
@@ -210,16 +222,17 @@ def generate_estimate(
 
     # Run the tool calls the model makes, feed the results back, until it returns
     # the final JSON. Capped so a misbehaving model can't loop forever.
-    prompt_tokens = completion_tokens = 0
+    prompt_tokens = completion_tokens = reasoning_tokens = 0
     for _ in range(5):
         resp = _client().chat.completions.create(**kwargs)
         usage = getattr(resp, "usage", None)
         if usage:
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
+            reasoning_tokens += _reasoning_tokens(usage)
         message = resp.choices[0].message
         if not getattr(message, "tool_calls", None):
-            return message.content, _usage(prompt_tokens, completion_tokens)
+            return message.content, _usage(prompt_tokens, completion_tokens, reasoning_tokens)
         kwargs["messages"].append(message)
         for call in message.tool_calls:
             args = json.loads(call.function.arguments)
@@ -231,7 +244,7 @@ def generate_estimate(
                     "content": json.dumps(result),
                 }
             )
-    return message.content, _usage(prompt_tokens, completion_tokens)
+    return message.content, _usage(prompt_tokens, completion_tokens, reasoning_tokens)
 
 
 def _photo_content(photos: list[Photo]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -274,6 +287,7 @@ def _chat_json(
     model: str,
     content: list[dict],
     *,
+    stage: str = "",
     reasoning_effort: str | None = None,
     temperature: float | None = None,
 ) -> tuple[str, dict]:
@@ -300,7 +314,7 @@ def _chat_json(
     else:
         kwargs["temperature"] = temperature if temperature is not None else 0
 
-    prompt_tokens = completion_tokens = 0
+    prompt_tokens = completion_tokens = reasoning_tokens = 0
     last_text = last_reason = None
     for _ in range(2):
         resp = _client().chat.completions.create(**kwargs)
@@ -308,14 +322,15 @@ def _chat_json(
         if usage:
             prompt_tokens += usage.prompt_tokens
             completion_tokens += usage.completion_tokens
+            reasoning_tokens += _reasoning_tokens(usage)
         choice = resp.choices[0]
         last_reason = choice.finish_reason
         if choice.finish_reason == "length":
+            where = f" in {stage}" if stage else ""
             raise ModelError(
-                f"Vision model output hit the {MAX_OUTPUT_TOKENS}-token cap (the "
-                "model maximum) and was cut off before completing its JSON — the "
-                "property has too many photos. Lower MAX_PHOTOS, or batch the "
-                "photos across multiple observe/era calls."
+                f"Vision model output hit the {MAX_OUTPUT_TOKENS}-token cap{where} and "
+                "was cut off before completing its JSON. Lower PHOTO_BATCH (photo "
+                "stages), chunk this stage's input, or trim its output schema."
             )
         text = _extract_json(choice.message.content or "")
         try:
@@ -323,11 +338,12 @@ def _chat_json(
         except (json.JSONDecodeError, TypeError):
             last_text = text
             continue  # transient bad JSON — retry once
-        return text, _usage(prompt_tokens, completion_tokens)
+        return text, _usage(prompt_tokens, completion_tokens, reasoning_tokens)
 
     snippet = (last_text or "")[:500] + (" …" if len(last_text or "") > 500 else "")
+    where = f" in {stage}" if stage else ""
     raise ModelError(
-        f"Vision model returned unparseable JSON (finish_reason={last_reason!r}) "
+        f"Vision model returned unparseable JSON{where} (finish_reason={last_reason!r}) "
         f"after a retry — the reply was cut off without a length flag. It returned "
         f"{len(last_text or '')} chars starting: {snippet!r}"
     )
@@ -373,7 +389,8 @@ def _run_photo_batches(
         blocks, preds, sent = _photo_content(photos[start : start + PHOTO_BATCH])
         content = [{"type": "text", "text": prompt}, *blocks]
         raw, usage = _chat_json(
-            model, content, reasoning_effort=reasoning_effort, temperature=temperature
+            model, content, stage=stage,
+            reasoning_effort=reasoning_effort, temperature=temperature,
         )
         for entry in _loads(raw, stage).get(list_key, []):
             if isinstance(entry.get("photoIndex"), int):
@@ -441,7 +458,28 @@ def assess_support(
         {"type": "text", "text": build_input_text(payload)},
     ]
     return _chat_json(
-        model, content, reasoning_effort=reasoning_effort, temperature=temperature
+        model, content, stage="renovation support",
+        reasoning_effort=reasoning_effort, temperature=temperature,
+    )
+
+
+def analyze_learning(
+    model: str,
+    prompt: str,
+    payload: dict,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """Learning loop: compare a run's logs against expert ground truth and
+    recommend what to tune (text-only)."""
+    content = [
+        {"type": "text", "text": prompt},
+        {"type": "text", "text": build_input_text(payload)},
+    ]
+    return _chat_json(
+        model, content, stage="learning",
+        reasoning_effort=reasoning_effort, temperature=temperature,
     )
 
 
@@ -459,5 +497,6 @@ def match_candidates(
         {"type": "text", "text": build_input_text(payload)},
     ]
     return _chat_json(
-        model, content, reasoning_effort=reasoning_effort, temperature=temperature
+        model, content, stage="candidate matching",
+        reasoning_effort=reasoning_effort, temperature=temperature,
     )
