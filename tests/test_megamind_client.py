@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from app import megamind_client
+from app.clients import megamind_client
 from app.errors import BciFetchError, ItemsFetchError
-from app.megamind_client import _map_items, fetch_bci_factor, fetch_renovation_items
+from app.clients.megamind_client import _map_items, fetch_bci_factor, fetch_renovation_items
 
 
 def _item(**overrides):

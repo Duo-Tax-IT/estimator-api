@@ -24,10 +24,16 @@ def _patch_upstreams(monkeypatch, items=SAMPLE_ITEMS, photos=None, property=None
     monkeypatch.setattr(estimator_v2, "fetch_renovation_items", lambda: items)
     monkeypatch.setattr(estimator_v2, "fetch_photos", lambda rp_id: photos)
     monkeypatch.setattr(estimator_v2, "fetch_property", lambda rp_id: property)
+    # Dedup downloads images to hash them; keep the pipeline tests offline.
+    monkeypatch.setattr(estimator_v2, "dedup_photos", lambda photos: photos)
 
 
-def _patch_stages(monkeypatch, observations, candidates):
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps(observations), {}))
+def _patch_stages(monkeypatch, observations, candidates, era=None, support=None):
+    era = era if era is not None else {"eraAnalysis": []}
+    support = support if support is not None else {"renovationSupportFindings": []}
+    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps(observations), {}, [], []))
+    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps(era), {}))
+    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps(support), {}))
     monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: (json.dumps(candidates), {}))
 
 
@@ -59,6 +65,8 @@ def test_v2_shape_matches_v1_prices_from_library_and_keeps_stages(monkeypatch):
     assert out["Property"] == {"beds": "1", "propertyType": "UNIT"}
     # Per-stage debug payload is carried through.
     assert out["Stages"]["observations"] == observations
+    assert out["Stages"]["eraAnalysis"] == {"eraAnalysis": []}
+    assert out["Stages"]["renovationSupport"] == {"renovationSupportFindings": []}
     assert out["Stages"]["candidates"]["validatedCandidates"] == candidates["validatedCandidates"]
     assert out["Stages"]["candidates"]["rejectedCandidates"] == candidates["rejectedCandidates"]
     assert out["Stages"]["toolInput"][0] == {
@@ -112,6 +120,7 @@ def test_v2_room_scaling_doubles_bathroom_total_when_enabled(monkeypatch):
     assert out["Renovations Total"] == "$2,000.00"
     assert out["Stages"]["roomScaling"] == {
         "manual": {}, "auto": True, "applied": {"Bathroom": 2},
+        "reasons": {"bathroom": "auto — property.baths='2'"},
     }
 
 
@@ -162,12 +171,19 @@ def test_v2_sqm_areaForTool_maps_to_area_and_caps_to_living_space(monkeypatch):
     assert out["Stages"]["toolInput"][0]["area"] == 60
 
 
-def test_v2_forwards_observations_into_match_payload_and_splits_owner(monkeypatch):
+def test_v2_only_supported_findings_reach_match_payload_and_splits_owner(monkeypatch):
     _patch_upstreams(monkeypatch)
-    observations = {"photoObservations": [{"photoIndex": 0}]}
+    support = {"renovationSupportFindings": [
+        {"observedItem": "split system", "roomType": "living",
+         "estimatedRenovationYear": "2000", "shouldProceedToCatalogMatch": True},
+        {"observedItem": "old tiles", "roomType": "bathroom",
+         "shouldProceedToCatalogMatch": False},
+    ]}
     captured = {}
 
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps(observations), {}))
+    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: (json.dumps({"photoObservations": []}), {}, [], []))
+    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps(support), {}))
 
     def fake_match(model, prompt, payload, **kwargs):
         captured["payload"] = payload
@@ -182,8 +198,9 @@ def test_v2_forwards_observations_into_match_payload_and_splits_owner(monkeypatc
     monkeypatch.setattr(estimator_v2, "match_candidates", fake_match)
 
     out = estimator_v2.build_estimate_v2(_req(settlementDate="2010-01-01"))
-    # Step 1 output is fed into Step 2's payload, alongside the trimmed catalog.
-    assert captured["payload"]["photoObservations"] == observations["photoObservations"]
+    # The Python gate drops shouldProceedToCatalogMatch=false; only the supported
+    # finding reaches Step 2, alongside the trimmed catalog.
+    assert [f["observedItem"] for f in captured["payload"]["renovationSupportFindings"]] == ["split system"]
     assert captured["payload"]["renovationItems"][0]["_id"] == "a1"
     # Year 2000 predates settlement 2010 → previous owner.
     assert out["Renovations"][0]["Owner"] == "Previous Owner"
@@ -246,10 +263,21 @@ def test_v2_parent_plus_child_match_does_not_double_count(monkeypatch):
 
 def test_v2_prompt_preview_includes_both_stage_prompts(monkeypatch):
     _patch_upstreams(monkeypatch)
-    monkeypatch.setattr(estimator_v2, "get_base_prompt",
-                        lambda f: "OBS_TPL" if "observe" in f else "CAND_TPL")
+
+    def fake_prompt(f):
+        if "observe" in f:
+            return "OBS_TPL"
+        if "era" in f:
+            return "ERA_TPL"
+        if "support" in f:
+            return "SUP_TPL"
+        return "CAND_TPL"
+
+    monkeypatch.setattr(estimator_v2, "get_base_prompt", fake_prompt)
     out = estimator_v2.preview_estimate_prompt_v2(_req())
     assert "STEP 1 — OBSERVATION" in out and "OBS_TPL" in out
+    assert "STEP 1b — ERA ANALYSIS" in out and "ERA_TPL" in out
+    assert "STEP 1.5 — RENOVATION SUPPORT" in out and "SUP_TPL" in out
     assert "STEP 2 — CANDIDATE MATCHING" in out and "CAND_TPL" in out
     # Step 2's input payload is shown; observations are a runtime placeholder.
     assert '"renovationItems"' in out
@@ -258,7 +286,9 @@ def test_v2_prompt_preview_includes_both_stage_prompts(monkeypatch):
 
 def test_v2_bad_observation_json_raises(monkeypatch):
     _patch_upstreams(monkeypatch)
-    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: ("not json", {}))
+    monkeypatch.setattr(estimator_v2, "observe_photos", lambda *a, **k: ("not json", {}, [], []))
+    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
     monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: ("{}", {}))
     with pytest.raises(ModelError):
         estimator_v2.build_estimate_v2(_req())
@@ -267,7 +297,9 @@ def test_v2_bad_observation_json_raises(monkeypatch):
 def test_v2_bad_candidate_json_raises(monkeypatch):
     _patch_upstreams(monkeypatch)
     monkeypatch.setattr(estimator_v2, "observe_photos",
-                        lambda *a, **k: (json.dumps({"photoObservations": []}), {}))
+                        lambda *a, **k: (json.dumps({"photoObservations": []}), {}, [], []))
+    monkeypatch.setattr(estimator_v2, "analyze_era", lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2, "assess_support", lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
     monkeypatch.setattr(estimator_v2, "match_candidates", lambda *a, **k: ("not json", {}))
     with pytest.raises(ModelError):
         estimator_v2.build_estimate_v2(_req())

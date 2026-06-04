@@ -17,7 +17,7 @@ import httpx
 # Allow `import app...` when run from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.rpdata_client import _map_photos  # noqa: E402
+from app.clients.rpdata_client import _map_photos  # noqa: E402
 
 DEFAULT_URL = "https://calc.duo.tax/property/{rp_id}"
 

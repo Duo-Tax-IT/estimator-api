@@ -1,4 +1,4 @@
-from app.gfa import calculate_gfa
+from app.helpers.gfa import calculate_gfa
 
 
 def test_breaks_gfa_into_rooms_and_living_space():

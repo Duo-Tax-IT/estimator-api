@@ -1,7 +1,7 @@
 import httpx
 
-from .config import get_settings
-from .errors import SalesforceFetchError
+from ..config import get_settings
+from ..errors import SalesforceFetchError
 
 # Path appended to the Salesforce proxy base URL (SALESFORCE_API_URL).
 _QUERY_PATH = "/api/salesforce/query"

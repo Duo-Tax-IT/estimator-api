@@ -13,7 +13,7 @@ import sys
 # Allow `import app...` when run from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.megamind_client import fetch_renovation_items  # noqa: E402
+from app.clients.megamind_client import fetch_renovation_items  # noqa: E402
 
 
 def main() -> None:

@@ -4,12 +4,12 @@ import openai
 
 from .config import get_settings
 from .errors import BciFetchError, ItemsFetchError, ModelError, NoPhotosError
-from .gfa import gfa_from_property
-from .megamind_client import fetch_bci_factor, fetch_renovation_items
-from .openai_client import build_input_text, generate_estimate
-from .pricing import dedup_by_id, expand_to_leaves, price_items
+from .helpers.gfa import gfa_from_property
+from .clients.megamind_client import fetch_bci_factor, fetch_renovation_items
+from .clients.openai_client import build_input_text, generate_estimate
+from .helpers.pricing import dedup_by_id, expand_to_leaves, price_items
 from .prompts import get_base_prompt
-from .rpdata_client import extract_state, fetch_photos, fetch_property
+from .clients.rpdata_client import extract_state, fetch_photos, fetch_property
 from .schemas import EstimateRequest
 
 
@@ -120,10 +120,25 @@ def _as_num(value, default: float = 1.0) -> float:
         return default
 
 
+def _room_count(rtype: str, manual: dict, auto: bool, property_data: dict):
+    """Pick a room-scoped reno's count multiplier and a plain reason for it."""
+    if rtype in manual:
+        return max(_as_num(manual[rtype]), 0.0), f"manual roomScale[{rtype}]"
+    if not auto:
+        return 1.0, "not scaled — assumeAllRoomsRenovated off and no roomScale"
+    if rtype not in _ROOM_COUNT_ATTR:
+        return 1.0, f"not scaled — {rtype} never auto-scales (no property room count)"
+    attr = _ROOM_COUNT_ATTR[rtype]
+    count = max(_as_num(property_data.get(attr), 1), 1.0)
+    if count == 1:
+        return 1.0, f"not scaled — auto on but property.{attr}={property_data.get(attr)!r} (≤1)"
+    return count, f"auto — property.{attr}={property_data.get(attr)!r}"
+
+
 def apply_room_counts(
     renovations: list[dict], property_data: dict, config: dict
-) -> float:
-    """Tag each renovation with a `Count` and return the count-scaled total.
+) -> tuple[float, dict]:
+    """Tag each renovation with a `Count`; return (scaled total, reasons-by-type).
 
     A room-scoped renovation (kitchen / bathroom / bedroom) can be counted more
     than once:
@@ -134,28 +149,25 @@ def apply_room_counts(
         bedrooms→`beds`).
     Line-item quantities stay one room's worth; the multiplier hits the total
     (and the UI subtotal) via `FinalCost × Count`. `Count` defaults to 1.
-    `CountOf` (the room type) is set on scaled rows for the UI label.
+    `CountOf` (the room type) is set on scaled rows for the UI label. `reasons`
+    maps each present room type to why it did / didn't scale (for the audit).
     """
     manual = config.get("roomScale") or {}
     auto = bool(config.get("assumeAllRoomsRenovated"))
-    total = 0.0
+    total, reasons = 0.0, {}
     for reno in renovations:
         root = (reno.get("groupPath") or [reno.get("Name")])[0]
         rtype = _ROOM_OF_GROUP.get(root)
+        count = 1.0
         if rtype:
             # Tag the room type so the UI can apply manual multipliers live.
             reno["RoomType"] = rtype
-        count, label = 1.0, None
-        if rtype and rtype in manual:
-            count, label = max(_as_num(manual.get(rtype)), 0.0), rtype
-        elif rtype and auto and rtype in _ROOM_COUNT_ATTR:
-            count = max(_as_num(property_data.get(_ROOM_COUNT_ATTR[rtype]), 1), 1.0)
-            label = rtype
+            count, reasons[rtype] = _room_count(rtype, manual, auto, property_data)
         reno["Count"] = count
         if count != 1:
-            reno["CountOf"] = label
+            reno["CountOf"] = rtype
         total += float(reno.get("FinalCost", 0)) * count
-    return total
+    return total, reasons
 
 
 def _bci_factor(state: str | None, year, cache: dict) -> float:
@@ -292,7 +304,7 @@ def build_full_estimate(req: EstimateRequest) -> dict:
 
     # Count a room-scoped reno once per such room (opt-in); returns the scaled
     # total. Sets Count on each row, which split_by_owner also honours.
-    total = apply_room_counts(renovations, property_data, req.config or {})
+    total, _ = apply_room_counts(renovations, property_data, req.config or {})
     # Tags each renovation's Owner in place; must run before _format_renovations.
     owner_totals = split_by_owner(renovations, req.settlement_date)
 

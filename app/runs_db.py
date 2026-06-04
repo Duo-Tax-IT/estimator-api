@@ -20,27 +20,32 @@ def _conn() -> sqlite3.Connection:
             temperature REAL,
             label TEXT,
             address TEXT,
+            config TEXT,
+            settlement_date TEXT,
             prompt TEXT,
             response TEXT NOT NULL
         )"""
     )
-    # Add `address` to DBs created before it existed (throwaway store, no migrations).
+    # Backfill columns added after a DB was created (throwaway store, no migrations).
     cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)")]
-    if "address" not in cols:
-        conn.execute("ALTER TABLE runs ADD COLUMN address TEXT")
+    for col in ("address", "config", "settlement_date"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
     return conn
 
 
-def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, response, address=None):
+def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, response,
+             address=None, config=None, settlement_date=None):
     """Append one estimate run for later comparison."""
     with _conn() as conn:
         conn.execute(
             "INSERT INTO runs (created_at, rp_id, model, reasoning_effort,"
-            " temperature, label, address, prompt, response)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " temperature, label, address, config, settlement_date, prompt, response)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now(timezone.utc).isoformat(),
                 rp_id, model, reasoning_effort, temperature, label, address,
+                json.dumps(config) if config else None, settlement_date,
                 prompt, json.dumps(response),
             ),
         )
@@ -53,14 +58,16 @@ def list_runs(rp_id=None) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
             "SELECT id, created_at, rp_id, model, reasoning_effort, temperature,"
-            f" label, address, prompt, response FROM runs {where} ORDER BY id DESC",
+            f" label, address, config, settlement_date, prompt, response"
+            f" FROM runs {where} ORDER BY id DESC",
             params,
         ).fetchall()
     return [
         {
             "id": r[0], "created_at": r[1], "rp_id": r[2], "model": r[3],
             "reasoning_effort": r[4], "temperature": r[5], "label": r[6],
-            "address": r[7], "prompt": r[8], "response": json.loads(r[9]),
+            "address": r[7], "config": json.loads(r[8]) if r[8] else None,
+            "settlement_date": r[9], "prompt": r[10], "response": json.loads(r[11]),
         }
         for r in rows
     ]

@@ -1,4 +1,4 @@
-from app.pricing import price_items
+from app.helpers.pricing import price_items
 
 LIBRARY = {
     "each1": {"_id": "each1", "name": "Split AC", "defaultRate": 1200,

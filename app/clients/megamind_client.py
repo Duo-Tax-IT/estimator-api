@@ -1,7 +1,7 @@
 import httpx
 
-from .config import get_settings
-from .errors import BciFetchError, EstimatorError, ItemsFetchError
+from ..config import get_settings
+from ..errors import BciFetchError, EstimatorError, ItemsFetchError
 
 # Path appended to the megamind base URL (MEGAMIND_API_URL) for the catalog.
 _ITEMS_PATH = "/api/external/estimator-items"

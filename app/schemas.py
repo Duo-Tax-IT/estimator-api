@@ -42,3 +42,20 @@ class EstimateRequest(BaseModel):
     settlement_date: str | None = Field(default=None, alias="settlementDate")
 
     model_config = {"populate_by_name": True}
+
+
+class StepRequest(EstimateRequest):
+    """EstimateRequest plus the editable intermediate outputs the /playground
+    feeds between steps, so each pipeline step can run on hand-tweaked input.
+
+    `observations` and `era` are the full step-1/1b objects ({"photoObservations":
+    [...]} / {"eraAnalysis": [...]}); `validatedCandidates` is the post-match list
+    the price step prices.
+    """
+
+    observations: dict[str, Any] | None = None
+    era: dict[str, Any] | None = None
+    support: dict[str, Any] | None = Field(default=None, alias="renovationSupport")
+    validated_candidates: list[dict[str, Any]] | None = Field(
+        default=None, alias="validatedCandidates"
+    )

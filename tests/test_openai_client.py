@@ -1,6 +1,8 @@
+import json
+
 import pytest
 
-from app import openai_client
+from app.clients import openai_client
 from app.errors import ModelError
 from app.schemas import Photo
 
@@ -187,8 +189,63 @@ def test_chat_json_raises_clear_error_on_truncation(monkeypatch):
         openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
 
 
+def test_chat_json_retries_once_on_bad_json_then_succeeds(monkeypatch):
+    # JSON mode hiccup: first reply is unparseable, the retry is clean.
+    seq = iter([_resp("{bad json"), _resp('{"ok": true}')])
+    comp = type("Comp", (), {"create": lambda self, **kw: next(seq)})()
+    client = type("Cl", (), {"chat": type("Ch", (), {"completions": comp})()})()
+    monkeypatch.setattr(openai_client, "_client", lambda: client)
+    text, _ = openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
+    assert text == '{"ok": true}'
+
+
+def test_chat_json_raises_with_finish_reason_when_json_stays_bad(monkeypatch):
+    # A non-length abnormal stop (e.g. content_filter/recitation) is surfaced with
+    # its finish_reason, not a mystery "invalid JSON".
+    bad = _resp("{bad json", finish_reason="content_filter")
+    comp = type("Comp", (), {"create": lambda self, **kw: bad})()
+    client = type("Cl", (), {"chat": type("Ch", (), {"completions": comp})()})()
+    monkeypatch.setattr(openai_client, "_client", lambda: client)
+    with pytest.raises(ModelError, match="finish_reason='content_filter'"):
+        openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
+
+
 def test_build_input_text():
     assert openai_client.build_input_text({"x": 1}) == 'Input data:\n{"x": 1}'
+
+
+def test_observe_photos_batches_and_offsets_global_photoindex(monkeypatch):
+    # 3 photos with PHOTO_BATCH=2 → two calls; the 2nd batch's photoIndex must be
+    # offset by the 2 photos sent in the first so the merged index stays global.
+    monkeypatch.setattr(openai_client, "PHOTO_BATCH", 2)
+
+    def fake_content(batch):
+        preds = [{"photoIndex": i, "label": "r"} for i in range(len(batch))]
+        sent = [{"photoIndex": i, "url": p.url, "date": p.date} for i, p in enumerate(batch)]
+        return [], preds, sent
+
+    monkeypatch.setattr(openai_client, "_photo_content", fake_content)
+
+    calls = {"n": 0}
+
+    def fake_chat(model, content, **kw):
+        calls["n"] += 1
+        # Each batch reports one finding at its LOCAL index 0.
+        return json.dumps({"photoObservations": [{"photoIndex": 0, "tag": f"b{calls['n']}"}]}), \
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 10, "cost": 0.1}
+
+    monkeypatch.setattr(openai_client, "_chat_json", fake_chat)
+
+    photos = [Photo(url=f"u{i}") for i in range(3)]
+    raw, usage, preds, sent = openai_client.observe_photos("m", "p", photos)
+
+    obs = json.loads(raw)["photoObservations"]
+    assert calls["n"] == 2                                  # 3 photos / batch 2
+    assert [o["photoIndex"] for o in obs] == [0, 2]         # batch 2 offset by 2 sent
+    assert [o["tag"] for o in obs] == ["b1", "b2"]
+    assert [s["photoIndex"] for s in sent] == [0, 1, 2]     # contiguous global map
+    assert [p["photoIndex"] for p in preds] == [0, 1, 2]
+    assert usage["total_tokens"] == 20                      # summed across batches
 
 
 def test_is_reasoning_model_classification():

@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from app import rpdata_client
+from app.clients import rpdata_client
 from app.errors import RpDataFetchError
-from app.rpdata_client import (
+from app.clients.rpdata_client import (
     _map_photos,
     extract_state,
     fetch_photos,
