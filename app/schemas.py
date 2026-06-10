@@ -62,6 +62,18 @@ class LearnRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ChatRequest(BaseModel):
+    """A diagnostic-chat message about run `runId` (explain-only). `includePhotos`
+    re-sends the run's photos so the model can re-inspect them."""
+
+    run_id: int = Field(alias="runId")
+    message: str = Field(min_length=1)
+    include_photos: bool = Field(default=False, alias="includePhotos")
+    model: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class StepRequest(EstimateRequest):
     """EstimateRequest plus the editable intermediate outputs the /playground
     feeds between steps, so each pipeline step can run on hand-tweaked input.

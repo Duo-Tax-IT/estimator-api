@@ -42,7 +42,7 @@ build_estimate_v2(req)
 | 1.5 | support | `steps/support.py` `run_support` | text | Judges which observations are renovation-supported, using observations + era + `yearBuilt`. Flags `shouldProceedToCatalogMatch`. |
 | 2 | match | `steps/match.py` `run_match` | text | Grounds only the supported findings to catalog items. Output: `validatedCandidates`, `rejectedCandidates`, `summary`. |
 | — | year guard | `price.py` `apply_year_guard` | no | Drops candidates dated `<= yearBuilt` (that's the original build, not a renovation). |
-| 3 | price | `price.py` `price_validated` | no | Deterministic. BCI factor per state/year, internal-repaint assumption, expand whole-room matches to leaves, dedup, `price_items`, room-count scaling, owner split. |
+| 3 | price | `price.py` `price_validated` | no | Deterministic. BCI factor per state/year, internal-repaint assumption, expand whole-room matches to leaves, dedup, `price_items`, owner split. |
 
 Steps 1 and 1b run **concurrently** (`ThreadPoolExecutor(max_workers=2)`); the
 slower one sets the wall-clock. Steps 1.5 and 2 run after both finish.
@@ -80,7 +80,7 @@ Key knobs (`openai_client.py`):
   `reasoning_tokens` (the thinking slice of `completion_tokens`) for benchmarking
 - `Stages` — per-step output for debugging (observations, eraAnalysis,
   renovationSupport, roomHints, paintAssumption, candidates, toolInput, bci,
-  roomScaling, photos)
+  photos)
 - `Meta` — pipeline + prompt-version hashes (provenance for the learning loop)
 - `Previous Owner Total` / `Current Owner Total` — only when `settlement_date` is set
 

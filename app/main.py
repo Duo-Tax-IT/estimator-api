@@ -26,11 +26,20 @@ from .estimator_v2 import (
     step_price,
     step_support,
 )
+from .chat import build_chat_reply
 from .learning import build_learning_analysis
 from .prompts import get_base_prompt
 from .clients.rpdata_client import build_photos_zip, fetch_photos, search_addresses
-from .runs_db import get_run, list_learning, list_runs, save_learning, save_run
-from .schemas import EstimateRequest, LearnRequest, StepRequest
+from .runs_db import (
+    get_run,
+    list_chat_messages,
+    list_learning,
+    list_runs,
+    save_chat_message,
+    save_learning,
+    save_run,
+)
+from .schemas import ChatRequest, EstimateRequest, LearnRequest, StepRequest
 
 app = FastAPI(title="Estimator API", version="1.0.0")
 
@@ -43,8 +52,9 @@ app.add_middleware(
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
-# Serve extracted CSS/JS assets (e.g. /static/css/index.css, /static/js/app.js).
-app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+# Serve the built frontend's hashed JS/CSS/fonts (Vite → app/static/assets). The
+# HTML pages are served by the routes below. Source in frontend/; `npm run build`.
+app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
 
 
 def require_secret(secret_sauce: str | None = Header(default=None)) -> None:
@@ -136,8 +146,9 @@ def debug_prompt_v2(req: EstimateRequest, _: None = Depends(require_secret)) -> 
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def _save_run(req: EstimateRequest, result: dict) -> None:
-    """Log the run for later comparison. Best-effort: never break the estimate.
+def _save_run(req: EstimateRequest, result: dict) -> int | None:
+    """Log the run for later comparison; returns its id (None on failure).
+    Best-effort: never break the estimate.
 
     Saves the prompt(s) the run actually used so a learning loop can attribute
     signals to a prompt version — the v2 pipeline's observe + candidates prompts,
@@ -152,7 +163,7 @@ def _save_run(req: EstimateRequest, result: dict) -> None:
             )
         else:
             prompt = get_base_prompt(get_settings().estimator_prompt_file)
-        save_run(
+        return save_run(
             rp_id=req.rp_id,
             model=req.model or get_settings().default_model,
             reasoning_effort=req.reasoning_effort,
@@ -165,7 +176,7 @@ def _save_run(req: EstimateRequest, result: dict) -> None:
             response=result,
         )
     except Exception:
-        pass
+        return None
 
 
 def _run_estimate(builder, req: EstimateRequest) -> dict:
@@ -177,7 +188,9 @@ def _run_estimate(builder, req: EstimateRequest) -> dict:
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
         # Upstream failed: megamind, calc.duo.tax, or the vision model.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    _save_run(req, result)
+    run_id = _save_run(req, result)
+    if run_id is not None:
+        result["RunId"] = run_id  # lets the frontend attach a chat thread to this run
     return result
 
 
@@ -260,3 +273,29 @@ def learn_analyze(req: LearnRequest, _: None = Depends(require_secret)) -> dict:
 def learn_sessions(runId: int | None = Query(default=None)) -> dict:
     """Saved learning sessions (newest first). Omit runId for all."""
     return {"sessions": list_learning(runId)}
+
+
+@app.get("/chat")
+def chat_history(runId: int = Query(...)) -> dict:
+    """A run's diagnostic-chat thread (oldest first), to restore the panel."""
+    return {"messages": list_chat_messages(runId)}
+
+
+@app.post("/chat")
+def chat(req: ChatRequest, _: None = Depends(require_secret)) -> dict:
+    """Ask the AI about a saved run (explain-only). Persists the user message and
+    the reply, then returns the reply + token usage."""
+    run = get_run(req.run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"No run with id {req.run_id}")
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in list_chat_messages(req.run_id)
+    ]
+    save_chat_message(req.run_id, "user", req.message)
+    try:
+        reply, usage = build_chat_reply(run, history, req.message, req.include_photos, req.model)
+    except ModelError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    save_chat_message(req.run_id, "assistant", reply)
+    return {"reply": reply, "usage": usage}

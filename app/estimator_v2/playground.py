@@ -80,12 +80,6 @@ def step_price(req: StepRequest) -> dict:
         # What the deterministic year-guard dropped as original build.
         "yearGuardRejected": candidates["rejectedCandidates"],
         "bci": {"state": core["state"], "factors": core["factors"]},
-        "roomScaling": {
-            "manual": (req.config or {}).get("roomScale") or {},
-            "auto": bool((req.config or {}).get("assumeAllRoomsRenovated")),
-            "applied": core["roomCounts"],
-            "reasons": core["roomScaleReasons"],
-        },
     }
     if req.settlement_date:
         result["Previous Owner Total"] = _money(core["ownerTotals"]["Previous Owner"])

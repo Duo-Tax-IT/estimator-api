@@ -8,7 +8,7 @@ from openai import OpenAI
 from ..config import get_settings
 from ..errors import ModelError
 from ..helpers.pricing import price_items
-from ..room_classifier import classify, format_hint
+from ..room_classifier import classify, format_hint, should_drop
 from ..schemas import Photo
 
 # Hard cap on photos pulled into the pipeline (applied before dedup) and sent to
@@ -267,8 +267,10 @@ def _photo_content(photos: list[Photo]) -> tuple[list[dict], list[dict], list[di
             resp.raise_for_status()
         except httpx.HTTPError:
             continue  # non-fatal: skip a photo we couldn't fetch
-        content.append({"type": "image_url", "image_url": {"url": _data_url(resp)}})
         prediction = classify(resp.content)
+        if prediction and should_drop(prediction):
+            continue  # not a room (e.g. floor plan) — keep it out of the vision set
+        content.append({"type": "image_url", "image_url": {"url": _data_url(resp)}})
         if prediction:
             predictions.append({"photoIndex": sent, **prediction})
             hint = format_hint(prediction)
@@ -297,26 +299,43 @@ def _chat_json(
     models get `reasoning_effort` and no temperature; others get `temperature`.
 
     JSON mode should always yield valid JSON, so an unparseable reply is almost
-    always a cut-off / abnormal finish. We retry once (transient hiccup); a `length`
-    cap is surfaced immediately (retrying would just truncate again), and a
+    always a cut-off / abnormal finish. We retry once — but the retry DIVERGES from
+    the first try (temperature nudged off 0 + an explicit "finish the JSON" reminder),
+    because a deterministic temp-0 reply would otherwise re-truncate identically (the
+    common Gemini early-stop that reports `finish_reason='stop'`, not `length`). A
+    `length` cap is surfaced immediately (retrying would just truncate again), and a
     persistent failure surfaces the `finish_reason` so a non-length stop (e.g.
     RECITATION/SAFETY, which our guard can't pre-empt) is diagnosable rather than a
     mystery "invalid JSON".
     """
-    kwargs: dict = {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "response_format": {"type": "json_object"},
-    }
-    if _is_reasoning_model(model):
-        kwargs["reasoning_effort"] = reasoning_effort or REASONING_EFFORT
-    else:
-        kwargs["temperature"] = temperature if temperature is not None else 0
+    reasoning = _is_reasoning_model(model)
+    base_temp = temperature if temperature is not None else 0
 
     prompt_tokens = completion_tokens = reasoning_tokens = 0
     last_text = last_reason = None
-    for _ in range(2):
+    for attempt in range(2):
+        messages = [{"role": "user", "content": content}]
+        if attempt:
+            # The retry: nudge the model to emit the whole object so a partial first
+            # reply isn't reproduced verbatim.
+            messages.append({
+                "role": "user",
+                "content": "Your previous reply was cut off before the JSON was "
+                           "complete. Return the ENTIRE JSON object, valid and closed.",
+            })
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object"},
+        }
+        if reasoning:
+            kwargs["reasoning_effort"] = reasoning_effort or REASONING_EFFORT
+        else:
+            # Bump the retry off a deterministic 0 so it can diverge; a caller-set
+            # temperature already varies between calls, so keep it.
+            kwargs["temperature"] = base_temp if (attempt == 0 or base_temp > 0) else 0.4
+
         resp = _client().chat.completions.create(**kwargs)
         usage = getattr(resp, "usage", None)
         if usage:
@@ -481,6 +500,45 @@ def analyze_learning(
         model, content, stage="learning",
         reasoning_effort=reasoning_effort, temperature=temperature,
     )
+
+
+def chat_about_run(
+    model: str,
+    system: str,
+    context: dict,
+    history: list[dict],
+    photos: list[Photo] | None = None,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """Multi-turn, free-text chat grounded in one run's `context` (and optionally
+    its `photos`). `history` is the {role, content} thread, latest user message
+    last. Returns (reply_text, usage). Explain-only — no tools, no JSON mode.
+
+    Context rides in the system message and photos attach to the current question,
+    so the thread stays a clean system → user/assistant alternation."""
+    messages: list[dict] = [
+        {"role": "system", "content": system + "\n\n" + build_input_text(context)},
+        *history,
+    ]
+    if photos and messages[-1]["role"] == "user":
+        blocks, _, _ = _photo_content(photos)
+        question = messages[-1]["content"]
+        messages[-1] = {"role": "user", "content": [{"type": "text", "text": question}, *blocks]}
+    kwargs: dict = {"model": model, "messages": messages, "max_tokens": MAX_OUTPUT_TOKENS}
+    if _is_reasoning_model(model):
+        kwargs["reasoning_effort"] = reasoning_effort or REASONING_EFFORT
+    else:
+        kwargs["temperature"] = temperature if temperature is not None else 0
+
+    resp = _client().chat.completions.create(**kwargs)
+    usage = getattr(resp, "usage", None)
+    summary = (
+        _usage(usage.prompt_tokens, usage.completion_tokens, _reasoning_tokens(usage))
+        if usage else _usage(0, 0)
+    )
+    return (resp.choices[0].message.content or "").strip(), summary
 
 
 def match_candidates(

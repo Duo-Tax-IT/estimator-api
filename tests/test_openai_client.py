@@ -210,6 +210,32 @@ def test_chat_json_raises_with_finish_reason_when_json_stays_bad(monkeypatch):
         openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
 
 
+def test_chat_json_retry_diverges_on_early_stop(monkeypatch):
+    # A temp-0 reply that stops early (finish_reason='stop', not 'length') would
+    # re-truncate identically, so the retry must diverge: temperature off 0 + a
+    # reminder to finish the JSON.
+    calls = []
+    seq = iter([_resp('{"validatedCandidates": [', finish_reason="stop"),
+                _resp('{"ok": true}')])
+
+    def create(self, **kw):
+        calls.append(kw)
+        return next(seq)
+
+    comp = type("Comp", (), {"create": create})()
+    client = type("Cl", (), {"chat": type("Ch", (), {"completions": comp})()})()
+    monkeypatch.setattr(openai_client, "_client", lambda: client)
+
+    text, _ = openai_client._chat_json("gemini-x", [{"type": "text", "text": "p"}])
+    assert text == '{"ok": true}'
+    assert len(calls) == 2
+    assert calls[0]["temperature"] == 0  # deterministic first try
+    assert calls[1]["temperature"] >= 0.4  # diverged retry
+    # The retry carries an extra reminder message to emit the whole object.
+    assert len(calls[1]["messages"]) == 2
+    assert "ENTIRE JSON" in calls[1]["messages"][1]["content"]
+
+
 def test_build_input_text():
     assert openai_client.build_input_text({"x": 1}) == 'Input data:\n{"x": 1}'
 

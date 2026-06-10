@@ -99,59 +99,6 @@ def test_v2_stages_record_bci_audit(monkeypatch):
     assert out["Renovations"][0]["FinalCost"] == "$1,200.00"  # 2 × $1,200 × 0.5
 
 
-def test_v2_room_scaling_doubles_bathroom_total_when_enabled(monkeypatch):
-    items = [
-        {"_id": "b", "name": "Bathroom", "defaultRate": 0, "unit": "item",
-         "defaultQuantity": 1, "parentId": None, "parentName": None},
-        {"_id": "t", "name": "Toilet", "defaultRate": 1000, "unit": "item",
-         "defaultQuantity": 1, "parentId": "b", "parentName": "Bathroom"},
-    ]
-    _patch_upstreams(monkeypatch, items=items,
-                     property={"baths": "2", "propertyType": "HOUSE", "yearBuilt": "1990"})
-    candidates = {
-        "validatedCandidates": [
-            {"_id": "b", "name": "Bathroom", "unit": "item", "estimatedYear": "2021",
-             "areaForTool": None, "evidence": []},
-        ],
-        "rejectedCandidates": [], "summary": "",
-    }
-    _patch_stages(monkeypatch, {"photoObservations": []}, candidates)
-
-    out = estimator_v2.build_estimate_v2(_req(config={"assumeAllRoomsRenovated": True}))
-    # One bathroom itemised (Toilet $1,000, Count 2); the total reflects ×2 baths.
-    assert out["Renovations"][0]["Count"] == 2
-    assert out["Renovations Total"] == "$2,000.00"
-    assert out["Stages"]["roomScaling"] == {
-        "manual": {}, "auto": True, "applied": {"Bathroom": 2},
-        "reasons": {"bathroom": "auto — property.baths='2'"},
-    }
-
-
-def test_v2_manual_room_scale_doubles_total(monkeypatch):
-    items = [
-        {"_id": "b", "name": "Bathroom", "defaultRate": 0, "unit": "item",
-         "defaultQuantity": 1, "parentId": None, "parentName": None},
-        {"_id": "t", "name": "Toilet", "defaultRate": 1000, "unit": "item",
-         "defaultQuantity": 1, "parentId": "b", "parentName": "Bathroom"},
-    ]
-    _patch_upstreams(monkeypatch, items=items,
-                     property={"propertyType": "HOUSE", "yearBuilt": "1990"})
-    candidates = {
-        "validatedCandidates": [
-            {"_id": "b", "name": "Bathroom", "unit": "item", "estimatedYear": "2021",
-             "areaForTool": None, "evidence": []},
-        ],
-        "rejectedCandidates": [], "summary": "",
-    }
-    _patch_stages(monkeypatch, {"photoObservations": []}, candidates)
-
-    # Manual ×3, independent of the property's (unknown) bathroom count.
-    out = estimator_v2.build_estimate_v2(_req(config={"roomScale": {"bathroom": 3}}))
-    assert out["Renovations"][0]["Count"] == 3
-    assert out["Renovations Total"] == "$3,000.00"
-    assert out["Stages"]["roomScaling"]["manual"] == {"bathroom": 3}
-
-
 def test_v2_sqm_areaForTool_maps_to_area_and_caps_to_living_space(monkeypatch):
     items = [{"_id": "f1", "name": "Flooring", "defaultRate": 100, "unit": "sqm",
               "defaultQuantity": None, "parentName": None}]
@@ -369,7 +316,7 @@ def test_v2_build_year_fills_property_when_context_missing_it(monkeypatch):
     assert out["Renovations"] == []  # dropped by the year-guard using the filled year
 
 
-# ── Internal-repaint assumption (now on by default) ──
+# ── Internal-repaint assumption (QS convention, on by default) ──
 _PAINT_LIB = {"p": {"_id": "p", "name": "Painting - Internal", "defaultRate": 55,
                     "unit": "sqm", "parentId": None, "parentName": None}}
 _FRESH_PAINT = {"photoObservations": [{"roomType": "living", "condition": "clean"}]}
@@ -377,7 +324,7 @@ _GFA = {"livingSpace": 40, "bedroom": 0, "bathroom": 0, "kitchen": 0}
 
 
 def test_internal_paint_applies_by_default_when_conditions_met():
-    # No config: the repaint assumption now fires (age >= 10 + fresh paint seen),
+    # No config: the repaint assumption fires (old property + sound paint seen),
     # sized from the gfa living-space area.
     row, decision = estimator_v2._internal_paint_row(
         [], _FRESH_PAINT, {"yearBuilt": "2000"}, {}, _GFA, _PAINT_LIB

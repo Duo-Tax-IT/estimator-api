@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn semantic tokens → Tailwind utilities (bg-card, text-muted-foreground, …). */
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Dark is the only theme; <html class="dark"> is set on every page. One blue
+   accent over near-black blue surfaces — restrained color, generous contrast. */
+.dark {
+  --background: #0a0c10;
+  --foreground: #eef0f4;
+  --card: #12151b;
+  --card-foreground: #eef0f4;
+  --popover: #12151b;
+  --popover-foreground: #eef0f4;
+  --primary: #6b9bff;
+  --primary-foreground: #07090d;
+  --secondary: #1a1e26;
+  --secondary-foreground: #eef0f4;
+  --muted: #1a1e26;
+  --muted-foreground: #a3acbd;
+  --accent: #19233a;
+  --accent-foreground: #eef0f4;
+  --destructive: #f87171;
+  --success: #3dd9a4;
+  --border: #232a35;
+  --input: #232a35;
+  --ring: #6b9bff;
+  --radius: 0.85rem;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    line-height: 1.5;
+  }
+  ::selection { background: var(--accent); }
+}
+
+/* Primitives shadcn doesn't ship; everything else is a shadcn component. */
+@layer components {
+  .card { @apply bg-card border border-border rounded-2xl shadow-[0_2px_12px_-6px_rgba(0,0,0,0.7)]; }
+  .label { @apply text-[11px] uppercase tracking-wider text-muted-foreground; }
+  .spinner { @apply inline-block w-4 h-4 rounded-full border-2 border-border border-t-primary animate-spin; }
+  /* Toggle-style pill button (debug tabs, header nav). */
+  .btn-soft { @apply px-3 py-1.5 text-[13px] rounded-lg text-muted-foreground cursor-pointer transition hover:text-foreground hover:bg-accent; }
+  .btn-soft.is-active { @apply text-foreground bg-accent; }
+}

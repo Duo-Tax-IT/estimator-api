@@ -41,14 +41,24 @@ def _conn() -> sqlite3.Connection:
             analysis TEXT NOT NULL
         )"""
     )
+    # Diagnostic chat: the multi-turn thread for a run (one row per message).
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL
+        )"""
+    )
     return conn
 
 
 def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, response,
-             address=None, config=None, settlement_date=None):
-    """Append one estimate run for later comparison."""
+             address=None, config=None, settlement_date=None) -> int:
+    """Append one estimate run for later comparison; returns its id."""
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO runs (created_at, rp_id, model, reasoning_effort,"
             " temperature, label, address, config, settlement_date, prompt, response)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -59,6 +69,7 @@ def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, respons
                 prompt, json.dumps(response),
             ),
         )
+        return cur.lastrowid
 
 
 def get_run(run_id) -> dict | None:
@@ -106,6 +117,29 @@ def list_learning(run_id=None) -> list[dict]:
         {"id": r[0], "created_at": r[1], "run_id": r[2], "expert_input": r[3],
          "analysis": json.loads(r[4])}
         for r in rows
+    ]
+
+
+def save_chat_message(run_id, role, content) -> int:
+    """Append one chat message (role: 'user' | 'assistant') for a run; returns id."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO chat_messages (created_at, run_id, role, content) VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), run_id, role, content),
+        )
+        return cur.lastrowid
+
+
+def list_chat_messages(run_id) -> list[dict]:
+    """A run's chat thread, oldest first."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, role, content FROM chat_messages"
+            " WHERE run_id = ? ORDER BY id ASC",
+            (run_id,),
+        ).fetchall()
+    return [
+        {"id": r[0], "created_at": r[1], "role": r[2], "content": r[3]} for r in rows
     ]
 
 

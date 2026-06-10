@@ -7,6 +7,7 @@ from .clients.openai_client import analyze_learning
 from .config import get_settings
 from .errors import ModelError
 from .prompts import get_base_prompt
+from .run_context import build_run_context
 
 LEARNING_PROMPT_FILE = "learning_prompt.txt"
 
@@ -18,19 +19,9 @@ def build_learning_analysis(run: dict, expert_input: str, model: str | None = No
     full per-stage `Stages` logs the model attributes discrepancies to. Returns the
     parsed analysis; raises ModelError on unparseable model output.
     """
-    response = run.get("response") or {}
     payload = {
         "expertGroundTruth": expert_input,
-        "systemRun": {
-            "Renovations": response.get("Renovations", []),
-            "RenovationsTotal": response.get("Renovations Total"),
-            # The match step's own summary of what it detected (Step 2's `summary`).
-            "SummaryDescription": response.get("Summary Description"),
-            "Property": response.get("Property"),
-            "GFA": response.get("GFA"),
-            "Stages": response.get("Stages", {}),
-            "Meta": response.get("Meta", {}),
-        },
+        "systemRun": build_run_context(run.get("response") or {}),
     }
     raw, _ = analyze_learning(
         model or get_settings().default_model,

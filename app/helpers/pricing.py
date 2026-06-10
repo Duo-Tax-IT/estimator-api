@@ -125,3 +125,17 @@ def price_items(
     for r in priced:
         r["FinalCost"] = float(r["DefaultRate"]) * r["Quantity"] * r["Factor"]
     return {"renovations": priced, "total": sum(r["FinalCost"] for r in priced)}
+
+
+def collapse_parent(renovations: list[dict], parent: str, multiplier: float = 1) -> list[dict]:
+    """Replace a parent's subtree with one row whose cost is the subtree's summed
+    `FinalCost × multiplier`. The leaf rows are dropped (voided) so only the scaled
+    parent line counts. Matches `parent` against each row's `groupPath`, so it works
+    at any depth. A `parent` with no rows under it leaves the list unchanged."""
+    under = [r for r in renovations if parent in (r.get("groupPath") or [])]
+    if not under:
+        return renovations
+    base = sum(r.get("FinalCost", 0) for r in under)
+    kept = [r for r in renovations if parent not in (r.get("groupPath") or [])]
+    kept.append({"Name": parent, "FinalCost": base * multiplier})
+    return kept

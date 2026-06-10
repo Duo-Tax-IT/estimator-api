@@ -37,6 +37,18 @@ LABELS = {
 # Confidence % below which a prediction is too weak to hint with.
 THRESHOLD = 15.0
 
+# Confidence % below which a photo is so unlike any real scene (floor plans,
+# title diagrams, blurry junk) that we drop it from the vision set entirely,
+# not just withhold the hint. Far under THRESHOLD so a merely ambiguous real
+# room (Unsure, but a few % up) is still kept and sent.
+DROP_THRESHOLD = 3.0
+
+
+def should_drop(prediction: dict) -> bool:
+    """True when a classified photo scores so low it's almost certainly not a
+    room (e.g. a floor plan) — the caller skips sending it to the vision model."""
+    return prediction["confidence"] < DROP_THRESHOLD
+
 _CATEGORIES_FILE = Path(__file__).parent / "models" / "places365" / "categories_places365.txt"
 
 

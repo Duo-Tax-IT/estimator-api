@@ -64,9 +64,7 @@ def _build_model_input(
         "property": property_data,
         "renovationItems": _trim_catalog(renovation_items),
         "gfa": gfa,
-        # Pricing-only flags (room scaling) are dropped — the model never needs
-        # them and they'd just clutter the prompt.
-        "config": {k: v for k, v in config.items() if k not in _PRICING_CONFIG_KEYS},
+        "config": config,
     }
 
 
@@ -90,84 +88,8 @@ def split_by_owner(renovations: list[dict], settlement_date: str | None) -> dict
         year = str(reno.get("Year", ""))
         is_prev = settle_year and year.isdigit() and int(year) < settle_year
         reno["Owner"] = "Previous Owner" if is_prev else "Current Owner"
-        totals[reno["Owner"]] += reno.get("FinalCost", 0) * reno.get("Count", 1)
+        totals[reno["Owner"]] += reno.get("FinalCost", 0)
     return totals
-
-
-# A renovation's top-level group → its room type. A detected room reno can be
-# counted more than once: manually (config.roomScale, e.g. {"bathroom": 2}) or
-# automatically per the property's room count (config.assumeAllRoomsRenovated).
-_ROOM_OF_GROUP = {
-    "Bathroom": "bathroom",
-    "Bathroom - Additional Items": "bathroom",
-    "Kitchen - House": "kitchen",
-    "Kitchen - Apartment": "kitchen",
-    "Kitchen - Additional Items": "kitchen",
-    "Built-in Wardrobes": "bedroom",
-}
-# Property attribute holding each room type's count (auto option). Kitchen → 1.
-_ROOM_COUNT_ATTR = {"bathroom": "baths", "bedroom": "beds"}
-
-# Pricing-only config keys — kept out of the model input so the prompt stays
-# clean (they steer pricing, the model never needs them).
-_PRICING_CONFIG_KEYS = {"roomScale", "assumeAllRoomsRenovated"}
-
-
-def _as_num(value, default: float = 1.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _room_count(rtype: str, manual: dict, auto: bool, property_data: dict):
-    """Pick a room-scoped reno's count multiplier and a plain reason for it."""
-    if rtype in manual:
-        return max(_as_num(manual[rtype]), 0.0), f"manual roomScale[{rtype}]"
-    if not auto:
-        return 1.0, "not scaled — assumeAllRoomsRenovated off and no roomScale"
-    if rtype not in _ROOM_COUNT_ATTR:
-        return 1.0, f"not scaled — {rtype} never auto-scales (no property room count)"
-    attr = _ROOM_COUNT_ATTR[rtype]
-    count = max(_as_num(property_data.get(attr), 1), 1.0)
-    if count == 1:
-        return 1.0, f"not scaled — auto on but property.{attr}={property_data.get(attr)!r} (≤1)"
-    return count, f"auto — property.{attr}={property_data.get(attr)!r}"
-
-
-def apply_room_counts(
-    renovations: list[dict], property_data: dict, config: dict
-) -> tuple[float, dict]:
-    """Tag each renovation with a `Count`; return (scaled total, reasons-by-type).
-
-    A room-scoped renovation (kitchen / bathroom / bedroom) can be counted more
-    than once:
-      • Manual — `config['roomScale']` maps a room type to a multiplier, e.g.
-        {"bathroom": 2, "kitchen": 1}. Takes precedence; dial the numbers by hand.
-      • Auto — when `config['assumeAllRoomsRenovated']` is set, the room is
-        counted once per such room in the property (bathrooms→`baths`,
-        bedrooms→`beds`).
-    Line-item quantities stay one room's worth; the multiplier hits the total
-    (and the UI subtotal) via `FinalCost × Count`. `Count` defaults to 1.
-    `CountOf` (the room type) is set on scaled rows for the UI label. `reasons`
-    maps each present room type to why it did / didn't scale (for the audit).
-    """
-    manual = config.get("roomScale") or {}
-    auto = bool(config.get("assumeAllRoomsRenovated"))
-    total, reasons = 0.0, {}
-    for reno in renovations:
-        root = (reno.get("groupPath") or [reno.get("Name")])[0]
-        rtype = _ROOM_OF_GROUP.get(root)
-        count = 1.0
-        if rtype:
-            # Tag the room type so the UI can apply manual multipliers live.
-            reno["RoomType"] = rtype
-            count, reasons[rtype] = _room_count(rtype, manual, auto, property_data)
-        reno["Count"] = count
-        if count != 1:
-            reno["CountOf"] = rtype
-        total += float(reno.get("FinalCost", 0)) * count
-    return total, reasons
 
 
 def _bci_factor(state: str | None, year, cache: dict) -> float:
@@ -302,9 +224,7 @@ def build_full_estimate(req: EstimateRequest) -> dict:
     for reno in renovations:
         reno["Year"] = years.get(reno["_id"], "")
 
-    # Count a room-scoped reno once per such room (opt-in); returns the scaled
-    # total. Sets Count on each row, which split_by_owner also honours.
-    total, _ = apply_room_counts(renovations, property_data, req.config or {})
+    total = sum(r.get("FinalCost", 0) for r in renovations)
     # Tags each renovation's Owner in place; must run before _format_renovations.
     owner_totals = split_by_owner(renovations, req.settlement_date)
 

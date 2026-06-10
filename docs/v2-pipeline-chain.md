@@ -52,14 +52,14 @@ See `observe_prompt.txt`, `era_prompt.txt`, `support_prompt.txt`,
    ┌──────────────────────────────────────────────────────────────────────────────────────┐
    │  STEP 3 — PRICE (deterministic)                                                          │
    │  + internal-repaint assumption (opt-in)  → expand_to_leaves → dedup → price_items        │
-   │  + BCI factor (state × year)  → apply_room_counts → split_by_owner                        │
+   │  + BCI factor (state × year)  → split_by_owner                                             │
    └───────────────────────────────┬──────────────────────────────────────────────────────┘
                                     ▼
    ┌──────────────────────────────────────────────────────────────────────────────────────┐
    │  STEP 4 — FORMAT (deterministic)   →  Response                                           │
    │  Renovations · Totals · Property · GFA · Summary · Disclaimer · Usage                    │
    │  Stages{ observations, eraAnalysis, renovationSupport, roomHints, paintAssumption,       │
-   │          candidates, toolInput, bci, roomScaling, photos }                               │
+   │          candidates, toolInput, bci, photos }                                            │
    │  Meta{ pipeline, observe/era/support/candidates prompt hashes }                           │
    └──────────────────────────────────────────────────────────────────────────────────────┘
 ```

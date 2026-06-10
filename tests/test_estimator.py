@@ -178,51 +178,6 @@ def test_filter_catalog_keeps_kitchen_variant_for_property_type():
     assert estimator.filter_catalog_for_property(items, {}) == items
 
 
-def test_apply_room_counts_scales_room_groups_only_when_enabled():
-    renos = [
-        {"Name": "Toilet", "FinalCost": 1000, "groupPath": ["Bathroom"]},
-        {"Name": "Wall tiling", "FinalCost": 2000, "groupPath": ["Bathroom", "Wet"]},
-        {"Name": "Built-in Wardrobes", "FinalCost": 500, "groupPath": []},
-        {"Name": "Driveway", "FinalCost": 300, "groupPath": []},
-    ]
-    prop = {"baths": "2", "beds": "3"}
-
-    off, off_reasons = estimator.apply_room_counts([dict(r) for r in renos], prop, {})
-    assert off == 1000 + 2000 + 500 + 300  # flag off → nothing scaled
-    assert "assumeAllRoomsRenovated off" in off_reasons["bathroom"]
-
-    rows = [dict(r) for r in renos]
-    on, on_reasons = estimator.apply_room_counts(rows, prop, {"assumeAllRoomsRenovated": True})
-    # Bathroom subtree ×2 baths (incl. nested), wardrobes ×3 beds, driveway ×1.
-    assert on == (1000 + 2000) * 2 + 500 * 3 + 300
-    assert {r["Name"]: r["Count"] for r in rows} == {
-        "Toilet": 2, "Wall tiling": 2, "Built-in Wardrobes": 3, "Driveway": 1,
-    }
-    assert rows[0]["CountOf"] == "bathroom"
-    assert on_reasons == {"bathroom": "auto — property.baths='2'",
-                          "bedroom": "auto — property.beds='3'"}
-
-
-def test_apply_room_counts_manual_scale_overrides():
-    renos = [
-        {"Name": "Toilet", "FinalCost": 1000, "groupPath": ["Bathroom"]},
-        {"Name": "Sink", "FinalCost": 500, "groupPath": ["Kitchen - Apartment"]},
-        {"Name": "Driveway", "FinalCost": 300, "groupPath": []},
-    ]
-    # Manual multipliers scale by the given number, no property data needed.
-    total, _ = estimator.apply_room_counts(renos, {}, {"roomScale": {"bathroom": 3, "kitchen": 2}})
-    assert total == 1000 * 3 + 500 * 2 + 300
-    assert renos[0]["Count"] == 3 and renos[0]["CountOf"] == "bathroom"
-    assert renos[1]["Count"] == 2 and renos[1]["CountOf"] == "kitchen"
-    assert renos[2]["Count"] == 1  # not a room group → unscaled
-
-
-def test_split_by_owner_honours_count():
-    renos = [{"Year": "2021", "FinalCost": 1000, "Count": 2}]
-    totals = estimator.split_by_owner(renos, "2020-01-01")  # 2021 ≥ 2020 → current
-    assert totals["Current Owner"] == 2000
-
-
 def test_full_room_match_expands_parent_to_leaf_children(monkeypatch):
     # Nested catalog: Room(0) -> [ItemA(100), Sub(0) -> ItemB(200)].
     items = [

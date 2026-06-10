@@ -105,15 +105,6 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
             # AIQS BCI audit: the state used and the factor applied per renovation
             # year (1.0 = no scaling / unavailable). FinalCost = rate × qty × factor.
             "bci": {"state": core["state"], "factors": core["factors"]},
-            # Room scaling audit: the manual multipliers / auto flag requested,
-            # and what was actually applied per group.
-            "roomScaling": {
-                "manual": (req.config or {}).get("roomScale") or {},
-                "auto": bool((req.config or {}).get("assumeAllRoomsRenovated")),
-                "applied": core["roomCounts"],
-                # Per room type, why it did / didn't scale — the deterministic audit.
-                "reasons": core["roomScaleReasons"],
-            },
             # Index→url/date for the photos actually sent (skips ones that failed
             # to fetch), so each evidence `photoIndex` resolves to a real image.
             "photos": sent_photos,
