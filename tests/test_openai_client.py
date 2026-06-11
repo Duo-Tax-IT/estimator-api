@@ -241,37 +241,53 @@ def test_build_input_text():
 
 
 def test_observe_photos_batches_and_offsets_global_photoindex(monkeypatch):
-    # 3 photos with PHOTO_BATCH=2 → two calls; the 2nd batch's photoIndex must be
-    # offset by the 2 photos sent in the first so the merged index stays global.
+    # 3 prepared photos with PHOTO_BATCH=2 → two PARALLEL calls; each batch's
+    # finding (model-local index 0) must be offset by the batch's first global
+    # index so the merged index stays global (0 and 2, not 0 and 0).
     monkeypatch.setattr(openai_client, "PHOTO_BATCH", 2)
 
-    def fake_content(batch):
-        preds = [{"photoIndex": i, "label": "r"} for i in range(len(batch))]
-        sent = [{"photoIndex": i, "url": p.url, "date": p.date} for i, p in enumerate(batch)]
-        return [], preds, sent
-
-    monkeypatch.setattr(openai_client, "_photo_content", fake_content)
-
-    calls = {"n": 0}
-
     def fake_chat(model, content, **kw):
-        calls["n"] += 1
         # Each batch reports one finding at its LOCAL index 0.
-        return json.dumps({"photoObservations": [{"photoIndex": 0, "tag": f"b{calls['n']}"}]}), \
+        return json.dumps({"photoObservations": [{"photoIndex": 0}]}), \
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 10, "cost": 0.1}
 
     monkeypatch.setattr(openai_client, "_chat_json", fake_chat)
 
-    photos = [Photo(url=f"u{i}") for i in range(3)]
-    raw, usage, preds, sent = openai_client.observe_photos("m", "p", photos)
+    prepared = [{"photoIndex": i, "data_url": "d", "url": f"u{i}", "date": None,
+                 "prediction": {"label": "Living Room", "scene": "x", "confidence": 50.0}}
+                for i in range(3)]
+    raw, usage, preds, sent = openai_client.observe_photos("m", "p", prepared)
 
     obs = json.loads(raw)["photoObservations"]
-    assert calls["n"] == 2                                  # 3 photos / batch 2
-    assert [o["photoIndex"] for o in obs] == [0, 2]         # batch 2 offset by 2 sent
-    assert [o["tag"] for o in obs] == ["b1", "b2"]
+    assert sorted(o["photoIndex"] for o in obs) == [0, 2]   # batch 2 offset by its base index
     assert [s["photoIndex"] for s in sent] == [0, 1, 2]     # contiguous global map
-    assert [p["photoIndex"] for p in preds] == [0, 1, 2]
-    assert usage["total_tokens"] == 20                      # summed across batches
+    assert [p["photoIndex"] for p in preds] == [0, 1, 2]    # room hints carry the global index
+    assert usage["total_tokens"] == 20                      # summed across both batches
+
+
+def test_prepare_photos_downloads_once_drops_failures_and_reindexes(monkeypatch):
+    # Fix 2: each photo is fetched + classified once; an unfetchable photo is
+    # dropped and photoIndex is assigned AFTER drops (contiguous, matching what the
+    # vision model is actually sent).
+    import httpx
+
+    class _Resp:
+        content = b"img"
+        headers = {"content-type": "image/jpeg"}
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kw):
+        if url == "u1":
+            raise httpx.ConnectError("nope")
+        return _Resp()
+
+    monkeypatch.setattr(openai_client.httpx, "get", fake_get)
+    monkeypatch.setattr(openai_client, "classify", lambda b: None)  # classifier disabled
+
+    prepared = openai_client.prepare_photos([Photo(url="u0"), Photo(url="u1"), Photo(url="u2")])
+    assert [p["url"] for p in prepared] == ["u0", "u2"]      # u1 (download failed) dropped
+    assert [p["photoIndex"] for p in prepared] == [0, 1]     # reindexed contiguously after drop
 
 
 def test_is_reasoning_model_classification():

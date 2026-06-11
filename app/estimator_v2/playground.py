@@ -1,5 +1,6 @@
 import openai
 
+from ..clients.openai_client import prepare_photos
 from ..errors import ModelError
 from ..estimator import _format_renovations, _money
 from ..schemas import EstimateRequest, StepRequest
@@ -38,8 +39,9 @@ def step_context(req: EstimateRequest) -> dict:
 
 def step_observe(req: EstimateRequest) -> dict:
     ctx = fetch_v2_context(req)
+    prepared = prepare_photos(ctx["photos"])
     observations, usage, room_hints, sent_photos = _guard(
-        run_observe, ctx["model"], ctx["photos"], req
+        run_observe, ctx["model"], prepared, req
     )
     return {"observations": observations, "roomHints": room_hints,
             "photos": sent_photos, "usage": usage}
@@ -47,7 +49,8 @@ def step_observe(req: EstimateRequest) -> dict:
 
 def step_era(req: EstimateRequest) -> dict:
     ctx = fetch_v2_context(req)
-    era, usage = _guard(run_era, ctx["model"], ctx["photos"], req)
+    prepared = prepare_photos(ctx["photos"])
+    era, usage = _guard(run_era, ctx["model"], prepared, req)
     return {"era": era, "usage": usage}
 
 

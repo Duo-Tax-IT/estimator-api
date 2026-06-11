@@ -85,8 +85,15 @@ export const useEstimator = create((set, get) => ({
   openSavedRun(runRow) {
     const s = { suggestion: runRow.address || `rp_id ${runRow.rp_id}`, suggestionId: runRow.rp_id };
     const result = runRow.response || {};
-    set({ selected: s, result, version: result.Stages ? "v2" : "v1", error: "", status: "", detailRun: null, scales: {}, tab: "estimate", currentRunId: runRow.id });
+    set({ selected: s, result, version: result.Meta?.pipeline || (result.Stages ? "v2" : "v1"), error: "", status: "", detailRun: null, scales: {}, tab: "estimate", currentRunId: runRow.id });
+    window.history.replaceState(null, "", `/run/${runRow.id}`);
     get().loadPhotos(runRow.rp_id);
     get().loadRuns(runRow.rp_id);
+  },
+
+  // Open a run from its id (deep link) — fetches then reuses openSavedRun.
+  async openRunById(id) {
+    try { const run = await api.getRun(id); if (run) get().openSavedRun(run); }
+    catch { /* non-fatal */ }
   },
 }));

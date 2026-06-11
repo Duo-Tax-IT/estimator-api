@@ -7,10 +7,11 @@ from .parsing import _parse
 ERA_PROMPT_FILE = "era_prompt.txt"
 
 
-def run_era(model: str, photos: list, req: EstimateRequest) -> tuple:
-    """Step 1b — forensically date each finish. Returns (eraAnalysis, usage)."""
+def run_era(model: str, prepared: list, req: EstimateRequest) -> tuple:
+    """Step 1b — forensically date each finish (over photos already prepared once
+    by prepare_photos). Returns (eraAnalysis, usage)."""
     raw, usage = analyze_era(
-        model, get_base_prompt(ERA_PROMPT_FILE), photos,
+        model, get_base_prompt(ERA_PROMPT_FILE), prepared,
         reasoning_effort=req.reasoning_effort, temperature=req.temperature,
     )
     return _parse(raw, "era analysis"), usage

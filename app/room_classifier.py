@@ -71,6 +71,9 @@ def _model():
     except ImportError:
         print("[room_classifier] torch/torchvision not installed — room hints disabled")
         return None
+    # Single-threaded inference: prepare_photos classifies on several threads, and
+    # each × all-cores OpenMP would pin every core and starve the web server.
+    torch.set_num_threads(1)
 
     weights = Path(settings.places365_weights_path)
     if not weights.exists() or not _CATEGORIES_FILE.exists():

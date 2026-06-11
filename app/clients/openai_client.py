@@ -1,5 +1,6 @@
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 import httpx
@@ -381,85 +382,169 @@ def _loads(raw: str, stage: str) -> dict:
         ) from exc
 
 
+def prepare_photos(photos: list[Photo]) -> list[dict]:
+    """Download + room-classify each photo ONCE so the vision passes reuse them
+    instead of fetching/classifying the same photos twice.
+
+    Downloads run on a wide pool (pure I/O); classification on a narrow one so
+    torch inference can't monopolise the CPU. Non-room shots (floor plans, junk)
+    are dropped via `should_drop`. `photoIndex` is assigned AFTER drops, matching
+    how the vision model indexes the images it is actually sent. Best-effort: a
+    photo that can't be fetched is skipped. Each entry is
+    {photoIndex, data_url, url, date, prediction}."""
+    def _fetch(photo: Photo) -> tuple[Photo, httpx.Response] | None:
+        try:
+            resp = httpx.get(photo.url, timeout=30, follow_redirects=True)
+            resp.raise_for_status()
+            return photo, resp
+        except httpx.HTTPError:
+            return None  # non-fatal: skip a photo we couldn't fetch
+
+    def _classify(fetched: tuple[Photo, httpx.Response]) -> dict | None:
+        photo, resp = fetched
+        prediction = classify(resp.content)
+        if prediction and should_drop(prediction):
+            return None  # not a room — keep it out of the vision set
+        return {"data_url": _data_url(resp), "url": photo.url,
+                "date": photo.date, "prediction": prediction}
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        fetched = [f for f in pool.map(_fetch, photos[:MAX_PHOTOS]) if f]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        prepared = [p for p in pool.map(_classify, fetched) if p]
+    for i, p in enumerate(prepared):
+        p["photoIndex"] = i
+    return prepared
+
+
+def _room_hints(prepared: list[dict]) -> list[dict]:
+    """Room-classifier prediction per prepared photo (Stages audit)."""
+    return [{"photoIndex": p["photoIndex"], **p["prediction"]} for p in prepared if p["prediction"]]
+
+
+def _sent_photos(prepared: list[dict]) -> list[dict]:
+    """index→url/date map of the photos actually sent, so each evidence
+    `photoIndex` resolves to a real image (Stages audit)."""
+    return [{"photoIndex": p["photoIndex"], "url": p["url"], "date": p["date"]} for p in prepared]
+
+
+def _blocks(prepared: list[dict], *, with_hints: bool) -> list[dict]:
+    """Vision content blocks for prepared photos: each image, optionally its
+    room-type hint (observe only), and its capture date when known."""
+    content: list[dict] = []
+    for p in prepared:
+        content.append({"type": "image_url", "image_url": {"url": p["data_url"]}})
+        hint = format_hint(p["prediction"]) if with_hints and p["prediction"] else None
+        if hint:
+            content.append({"type": "text", "text": hint})
+        if p["date"]:
+            content.append({"type": "text", "text": f"The photo was taken on {p['date']}"})
+    return content
+
+
 def _run_photo_batches(
     model: str,
     prompt: str,
-    photos: list[Photo],
+    prepared: list[dict],
     list_key: str,
     stage: str,
     *,
+    with_hints: bool = True,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
-) -> tuple[dict, dict, list[dict], list[dict]]:
-    """Run a vision prompt over `photos` in batches of PHOTO_BATCH and merge.
+) -> tuple[dict, dict]:
+    """Run a vision prompt over already-prepared photos in batches of PHOTO_BATCH,
+    the batches running CONCURRENTLY, and merge.
 
     Splitting keeps each call's output (one entry per photo under `list_key`) under
-    MAX_OUTPUT_TOKENS on photo-heavy properties. Each batch's `photoIndex` values
-    (the entries, classifier predictions, and sent-photo map) are shifted by the
-    running count of photos already sent, so the merged result keeps one global
-    0-based index. Returns (merged {list_key: [...]}, summed usage, predictions,
-    sent_photos)."""
-    items: list[dict] = []
-    predictions: list[dict] = []
-    sent_photos: list[dict] = []
-    usages: list[dict] = []
-    offset = 0
-    for start in range(0, len(photos), PHOTO_BATCH):
-        blocks, preds, sent = _photo_content(photos[start : start + PHOTO_BATCH])
-        content = [{"type": "text", "text": prompt}, *blocks]
+    MAX_OUTPUT_TOKENS on photo-heavy properties; running the batches in parallel
+    keeps wall-clock at one call's latency, not the sum. The model indexes images
+    0-based within its own batch, so each entry's `photoIndex` is shifted by the
+    batch's first global index. Returns (merged {list_key: [...]}, summed usage)."""
+    batches = [prepared[i : i + PHOTO_BATCH] for i in range(0, len(prepared), PHOTO_BATCH)]
+
+    def _one(batch: list[dict]) -> tuple[int, list[dict], dict]:
+        content = [{"type": "text", "text": prompt}, *_blocks(batch, with_hints=with_hints)]
         raw, usage = _chat_json(
             model, content, stage=stage,
             reasoning_effort=reasoning_effort, temperature=temperature,
         )
-        for entry in _loads(raw, stage).get(list_key, []):
+        return batch[0]["photoIndex"], _loads(raw, stage).get(list_key, []), usage
+
+    with ThreadPoolExecutor(max_workers=min(len(batches) or 1, 8)) as pool:
+        results = list(pool.map(_one, batches))
+
+    items: list[dict] = []
+    usages: list[dict] = []
+    for base, entries, usage in results:
+        for entry in entries:
             if isinstance(entry.get("photoIndex"), int):
-                entry["photoIndex"] += offset
+                entry["photoIndex"] += base
             items.append(entry)
-        predictions += [{**p, "photoIndex": p["photoIndex"] + offset} for p in preds]
-        sent_photos += [{**s, "photoIndex": s["photoIndex"] + offset} for s in sent]
         usages.append(usage)
-        offset += len(sent)
-    return {list_key: items}, merge_usage(*usages), predictions, sent_photos
+    return {list_key: items}, merge_usage(*usages)
 
 
 def observe_photos(
     model: str,
     prompt: str,
-    photos: list[Photo],
+    prepared: list[dict],
     *,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
 ) -> tuple[str, dict, list[dict], list[dict]]:
     """v2 Step 1: describe what's visible in each photo (no matching/pricing).
 
-    Photos are processed in batches and merged (see _run_photo_batches). Also
-    returns the room-classifier prediction per photo and the index→url/date map of
-    the photos actually sent, both for Stages debug."""
-    merged, usage, predictions, sent_photos = _run_photo_batches(
-        model, prompt, photos, "photoObservations", "observation",
-        reasoning_effort=reasoning_effort, temperature=temperature,
+    Consumes photos already downloaded + classified by `prepare_photos`. Batches
+    run in parallel and merge. Also returns the room-classifier prediction per
+    photo and the index→url/date map, both for Stages debug."""
+    merged, usage = _run_photo_batches(
+        model, prompt, prepared, "photoObservations", "observation",
+        with_hints=True, reasoning_effort=reasoning_effort, temperature=temperature,
     )
-    return json.dumps(merged), usage, predictions, sent_photos
+    return json.dumps(merged), usage, _room_hints(prepared), _sent_photos(prepared)
 
 
 def analyze_era(
     model: str,
     prompt: str,
-    photos: list[Photo],
+    prepared: list[dict],
     *,
     reasoning_effort: str | None = None,
     temperature: float | None = None,
 ) -> tuple[str, dict]:
     """v2 Step 1b: forensically date visible finishes from fabrication/style cues.
 
-    A pure observation pass like observe_photos (batched + merged) — it only reports
-    what it sees and the era the fabrication technology implies. It is given no
-    build year and makes no renovation/original call; Step 2 does that comparison."""
-    merged, usage, _, _ = _run_photo_batches(
-        model, prompt, photos, "eraAnalysis", "era analysis",
-        reasoning_effort=reasoning_effort, temperature=temperature,
+    A pure observation pass like observe_photos over the SAME prepared photos, but
+    `with_hints=False`: era dates fabrication, not room type, so it ignores the
+    room-classifier hints. It is given no build year and makes no
+    renovation/original call; Step 2 does that comparison."""
+    merged, usage = _run_photo_batches(
+        model, prompt, prepared, "eraAnalysis", "era analysis",
+        with_hints=False, reasoning_effort=reasoning_effort, temperature=temperature,
     )
     return json.dumps(merged), usage
+
+
+def analyze_photos(
+    model: str,
+    prompt: str,
+    prepared: list[dict],
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict, list[dict], list[dict]]:
+    """v3 single pass: ONE vision call over all prepared photos returns the master
+    JSON {photoObservations, eraAnalysis, structureAnalysis} the v2 observe/era/
+    structure steps produced in three separate calls. No batching — the structure
+    section compares the oldest vs newest exterior across every photo, so they must
+    all be in one call. Also returns room hints + index→url/date map for Stages."""
+    content = [{"type": "text", "text": prompt}, *_blocks(prepared, with_hints=True)]
+    raw, usage = _chat_json(
+        model, content, stage="photo analysis",
+        reasoning_effort=reasoning_effort, temperature=temperature,
+    )
+    return raw, usage, _room_hints(prepared), _sent_photos(prepared)
 
 
 def assess_support(
@@ -558,3 +643,23 @@ def match_candidates(
         model, content, stage="candidate matching",
         reasoning_effort=reasoning_effort, temperature=temperature,
     )
+
+
+def compare_structure(
+    model: str,
+    prompt: str,
+    older: dict,
+    newer: dict,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+) -> tuple[str, dict]:
+    """v2 structural step: compare the oldest vs newest exterior photo for a
+    storey/footprint change. `older`/`newer` are {url, date} dicts; the two images
+    are labelled so the model knows which captures the earlier build state."""
+    content = [{"type": "text", "text": prompt}]
+    for label, p in (("OLDER", older), ("NEWER", newer)):
+        content.append({"type": "text", "text": f"{label} exterior photo (taken {p.get('date') or 'unknown'}):"})
+        content.append({"type": "image_url", "image_url": {"url": _image_data_url(p["url"])}})
+    return _chat_json(model, content, stage="structural delta",
+                      reasoning_effort=reasoning_effort, temperature=temperature)

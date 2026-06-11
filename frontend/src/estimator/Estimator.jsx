@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
 import AddressSearch from "@/components/AddressSearch";
@@ -15,6 +16,13 @@ export default function Estimator() {
   const result = useEstimator((s) => s.result);
   const tab = useEstimator((s) => s.tab);
   const setTab = useEstimator((s) => s.setTab);
+  const openRunById = useEstimator((s) => s.openRunById);
+
+  // Deep link: /run/:id opens that saved run on load.
+  useEffect(() => {
+    const m = window.location.pathname.match(/^\/run\/(\d+)/);
+    if (m) openRunById(m[1]);
+  }, [openRunById]);
 
   return (
     <div className="min-h-screen">
@@ -24,6 +32,7 @@ export default function Estimator() {
           <nav className="flex items-center gap-1">
             <a href="/playground" className="btn-soft">Playground</a>
             <a href="/learn" className="btn-soft">Learning</a>
+            <a href="/suggestions" className="btn-soft">Recommendations</a>
           </nav>
         </div>
       </header>
@@ -60,7 +69,7 @@ export default function Estimator() {
               <div className="card grid place-items-center text-center text-sm text-muted-foreground py-16 px-6">
                 <div className="max-w-sm space-y-1">
                   <p className="text-foreground font-medium">No estimate yet</p>
-                  <p>Pick a property above, then run v1 or v2 to see the detected renovations, photos and total.</p>
+                  <p>Pick a property above, then run v1, v2 or v3 to see the detected renovations, photos and total.</p>
                 </div>
               </div>
             )}

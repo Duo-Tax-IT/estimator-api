@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { v2Step } from "@/api";
+import { pipelineStep } from "@/api";
 import AddressSearch from "@/components/AddressSearch";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ const Pre = ({ value }) => (
 
 export default function Playground() {
   const [picked, setPicked] = useState(null);
+  const [version, setVersion] = useState("v2"); // which pipeline's step routes to call
   const [config, setConfig] = useState("");
   const [buildYear, setBuildYear] = useState("");
   const [settlement, setSettlement] = useState("");
@@ -59,39 +60,50 @@ export default function Playground() {
     }
   }
 
+  const step = (name, body) => pipelineStep(version, name, body, secret);
+
   const steps = {
     context: async () => {
       const b = base();
       delete b.photos; // always fetch the FULL set to pick from
-      const d = await v2Step("context", b, secret);
+      const d = await step("context", b);
       setOut((o) => ({ ...o, context: d }));
       const photos = d.photos || [];
       setAllPhotos(photos);
       setSelected(new Set(photos.slice(0, 20).map((p) => p.url))); // default: first 20
     },
+    // v3: one fused vision pass → {photoObservations, eraAnalysis, structureAnalysis}.
+    analyze: async () => {
+      const d = await step("analyze", base());
+      const a = d.analysis || {};
+      setOut((o) => ({ ...o, analyze: a }));
+      setInObs(JSON.stringify({ photoObservations: a.photoObservations || [] }));
+      setInEra(JSON.stringify({ eraAnalysis: a.eraAnalysis || [] }));
+      setThumbs(d.photos || []);
+    },
     observe: async () => {
-      const d = await v2Step("observe", base(), secret);
+      const d = await step("observe", base());
       setOut((o) => ({ ...o, observe: d.observations }));
       setInObs(JSON.stringify(d.observations));
       setThumbs(d.photos || []);
     },
     era: async () => {
-      const d = await v2Step("era", base(), secret);
+      const d = await step("era", base());
       setOut((o) => ({ ...o, era: d.era }));
       setInEra(JSON.stringify(d.era));
     },
     support: async () => {
-      const d = await v2Step("support", { ...base(), observations: JSON.parse(inObs), era: JSON.parse(inEra) }, secret);
+      const d = await step("support", { ...base(), observations: JSON.parse(inObs), era: JSON.parse(inEra) });
       setSupport(d.renovationSupport);
       setInSupport(JSON.stringify(d.renovationSupport));
     },
     match: async () => {
-      const d = await v2Step("match", { ...base(), renovationSupport: JSON.parse(inSupport) }, secret);
+      const d = await step("match", { ...base(), renovationSupport: JSON.parse(inSupport) });
       setOut((o) => ({ ...o, match: d.candidates }));
       setInValidated(JSON.stringify(d.candidates.validatedCandidates || []));
     },
     price: async () => {
-      const d = await v2Step("price", { ...base(), validatedCandidates: JSON.parse(inValidated), observations: JSON.parse(inObs) }, secret);
+      const d = await step("price", { ...base(), validatedCandidates: JSON.parse(inValidated), observations: JSON.parse(inObs) });
       setPriceTotal(d["Renovations Total"] || "$0.00");
       setOut((o) => ({ ...o, price: d }));
     },
@@ -112,8 +124,14 @@ export default function Playground() {
     <>
       <header className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-xl">
         <div className="max-w-[960px] mx-auto px-6 h-16 flex items-center gap-3">
-          <span className="font-semibold tracking-tight">v2 Pipeline Playground</span>
+          <span className="font-semibold tracking-tight">{version} Pipeline Playground</span>
           <a href="/" className="btn-soft">← Estimator</a>
+          <div className="flex gap-1">
+            {["v2", "v3"].map((v) => (
+              <button key={v} onClick={() => setVersion(v)}
+                className={`btn-soft ${version === v ? "text-foreground font-semibold" : ""}`}>{v}</button>
+            ))}
+          </div>
           <span className="text-[13px] text-muted-foreground ml-auto truncate">{picked ? <><b className="text-foreground">{picked.address}</b> · rp_id {picked.rpId}</> : "No property selected"}</span>
         </div>
       </header>
@@ -150,25 +168,26 @@ export default function Playground() {
           {out.context && <Pre value={out.context} />}
         </Step>
 
-        <Step no="1" title="Observe — what's visible" status={status.observe} onRun={() => runStep("observe", steps.observe)}>
-          <p className="text-xs text-muted-foreground mb-1.5">Vision pass → photoObservations. Auto-fills Match below.</p>
-          {!!thumbs.length && (
-            <div className="flex flex-wrap gap-2">
-              {thumbs.map((p, i) => (
-                <figure key={i} className="w-[110px] m-0">
-                  <img src={p.url} loading="lazy" className="w-[110px] h-20 object-cover rounded border border-border" />
-                  <figcaption className="text-[11px] text-muted-foreground">#{p.photoIndex}{p.date ? " · " + p.date : ""}</figcaption>
-                </figure>
-              ))}
-            </div>
-          )}
-          {out.observe && <Pre value={out.observe} />}
-        </Step>
+        {version === "v3" ? (
+          <Step no="1" title="Analyze — one master-JSON vision pass" status={status.analyze} onRun={() => runStep("analyze", steps.analyze)}>
+            <p className="text-xs text-muted-foreground mb-1.5">Single vision pass → photoObservations + eraAnalysis + structureAnalysis. Auto-fills Support below.</p>
+            <Thumbs photos={thumbs} />
+            {out.analyze && <Pre value={out.analyze} />}
+          </Step>
+        ) : (
+          <>
+            <Step no="1" title="Observe — what's visible" status={status.observe} onRun={() => runStep("observe", steps.observe)}>
+              <p className="text-xs text-muted-foreground mb-1.5">Vision pass → photoObservations. Auto-fills Match below.</p>
+              <Thumbs photos={thumbs} />
+              {out.observe && <Pre value={out.observe} />}
+            </Step>
 
-        <Step no="1b" title="Era — forensic dating" status={status.era} onRun={() => runStep("era", steps.era)}>
-          <p className="text-xs text-muted-foreground mb-1.5">Vision pass → eraAnalysis (fabrication/style era per element). Auto-fills Match.</p>
-          {out.era && <Pre value={out.era} />}
-        </Step>
+            <Step no="1b" title="Era — forensic dating" status={status.era} onRun={() => runStep("era", steps.era)}>
+              <p className="text-xs text-muted-foreground mb-1.5">Vision pass → eraAnalysis (fabrication/style era per element). Auto-fills Match.</p>
+              {out.era && <Pre value={out.era} />}
+            </Step>
+          </>
+        )}
 
         <Step no="1.5" title="Renovation Support — does evidence support a reno?" status={status.support} onRun={() => runStep("support", steps.support)}>
           <p className="text-xs text-muted-foreground mb-1.5">Inputs auto-fill from steps 1/1b. Judges support + year against the build-year baseline — no catalog match yet.</p>
@@ -205,6 +224,20 @@ function Step({ no, title, status, onRun, children }) {
       </div>
       <div className="p-3.5">{children}</div>
     </Card>
+  );
+}
+
+function Thumbs({ photos }) {
+  if (!photos.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {photos.map((p, i) => (
+        <figure key={i} className="w-[110px] m-0">
+          <img src={p.url} loading="lazy" className="w-[110px] h-20 object-cover rounded border border-border" />
+          <figcaption className="text-[11px] text-muted-foreground">#{p.photoIndex}{p.date ? " · " + p.date : ""}</figcaption>
+        </figure>
+      ))}
+    </div>
   );
 }
 

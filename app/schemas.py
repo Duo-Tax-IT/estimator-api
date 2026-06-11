@@ -29,6 +29,9 @@ class EstimateRequest(BaseModel):
     config: dict[str, Any] | None = None
     property: dict[str, Any] | None = None
     model: str | None = None
+    # v3 only: per-request override for the cheap text model used by the
+    # support/match steps. Falls back to settings.default_text_model, then `model`.
+    text_model: str | None = Field(default=None, alias="textModel")
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = Field(
         default=None, alias="reasoningEffort"
     )
@@ -58,6 +61,17 @@ class LearnRequest(BaseModel):
     run_id: int = Field(alias="runId")
     expert_input: str = Field(alias="expertInput", min_length=1)
     model: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class AppliedRequest(BaseModel):
+    """Mark/unmark one tuning recommendation (session `sessionId`, position
+    `recIndex`) as applied to the prompts by hand."""
+
+    session_id: int = Field(alias="sessionId")
+    rec_index: int = Field(alias="recIndex")
+    applied: bool
 
     model_config = {"populate_by_name": True}
 

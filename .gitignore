@@ -7,3 +7,4 @@ __pycache__/
 venv/
 runs.db
 app/models/places365/*.pth.tar
+static/

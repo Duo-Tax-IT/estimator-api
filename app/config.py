@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Set the exact API id here (vision-capable Gemini Flash).
     default_model: str = "gemini-3.5-flash"
 
+    # v3 only: the cheap text model that runs the text-only reasoning steps
+    # (support, match) over the master JSON — no vision needed there. Empty =
+    # reuse the (expensive) vision `default_model`. Set a cheaper text id to save.
+    default_text_model: str = ""
+
     # Base rpdata (calc.duo.tax) endpoint for a property, keyed by rp_id. The
     # client appends `/photos` for the photos payload and uses the base URL for
     # property attributes. Callers pass `rpId`, never raw photos/attributes.

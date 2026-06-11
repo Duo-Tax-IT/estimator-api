@@ -22,8 +22,11 @@ Rules:
 - Do NOT calculate cost, rate, or quantity.
 - Map each finding to the single closest catalog item, using its `observedItem`
   and `roomType`. Set `estimatedYear` to the finding's `estimatedRenovationYear`.
-- If no catalog item is a reasonable match for a finding, reject it (with a reason)
-  rather than forcing a wrong item.
+- If no catalog item is a reasonable match for a SUPPORTED finding, do NOT force a
+  wrong item and do NOT discard it: list it in `unmatchedFindings` — a real
+  renovation we simply don't stock in the catalog yet, to be surfaced for review.
+- Reserve `rejectedCandidates` for findings you drop for a DIFFERENT reason (a
+  duplicate, or excluded by `config`) — not for "no catalog item exists".
 - Exclude: duplicates, anything excluded by `config`. For overlapping findings that
   map to the same item, keep one.
 
@@ -65,6 +68,9 @@ Return STRICT JSON only — no markdown, no commentary — in this shape:
   ],
   "rejectedCandidates": [
     { "candidateName": "string", "matchedItemId": "string or null", "reason": "string", "evidence": "string" }
+  ],
+  "unmatchedFindings": [
+    { "observedItem": "string", "roomType": "string", "estimatedYear": "YYYY", "reason": "string (why no catalog item fits)", "evidence": "string" }
   ],
   "summary": "string"
 }

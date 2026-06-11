@@ -21,6 +21,7 @@ export default function RunControls() {
       <div className="flex gap-2.5">
         <Button disabled={!selected || !!status} onClick={() => run("v1")}>Run v1</Button>
         <Button disabled={!selected || !!status} onClick={() => run("v2")}>Run v2</Button>
+        <Button disabled={!selected || !!status} onClick={() => run("v3")}>Run v3</Button>
       </div>
 
       {status && (

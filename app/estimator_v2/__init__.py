@@ -5,7 +5,7 @@ import openai
 
 from ..errors import ModelError
 from ..estimator import _format_renovations, _money
-from ..clients.openai_client import merge_usage
+from ..clients.openai_client import merge_usage, prepare_photos
 from ..prompts import get_base_prompt
 from ..schemas import EstimateRequest
 from .context import fetch_v2_context
@@ -17,10 +17,12 @@ from .steps import (
     CANDIDATES_PROMPT_FILE,
     ERA_PROMPT_FILE,
     OBSERVE_PROMPT_FILE,
+    STRUCTURE_PROMPT_FILE,
     SUPPORT_PROMPT_FILE,
     run_era,
     run_match,
     run_observe,
+    run_structure,
     run_support,
 )
 from .playground import (
@@ -42,6 +44,17 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
+def _needs_review_row(finding: dict) -> dict:
+    """A supported renovation that has no catalog item yet — surfaced in the list
+    but unpriced and flagged, so it's never silently dropped and we can add it to
+    the catalog later. Blank cost keeps it out of the totals (parseMoney('') == 0)."""
+    return {
+        "Name": finding.get("observedItem", "Unidentified renovation"),
+        "Year": finding.get("estimatedYear", ""),
+        "needsReview": True,
+    }
+
+
 def build_estimate_v2(req: EstimateRequest) -> dict:
     """Detect renovations via the multi-step v2 pipeline.
 
@@ -52,34 +65,48 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
     """
     ctx = fetch_v2_context(req)
     try:
+        # Download + classify every photo ONCE here, then both vision passes reuse
+        # it — no photo is fetched or classified twice.
+        prepared = prepare_photos(ctx["photos"])
         # Steps 1 & 1b are independent vision passes over the same photos, so they
         # run in parallel — the slower one sets the wall-clock, not obs + era.
         with ThreadPoolExecutor(max_workers=2) as pool:
-            obs_f = pool.submit(run_observe, ctx["model"], ctx["photos"], req)
-            era_f = pool.submit(run_era, ctx["model"], ctx["photos"], req)
+            obs_f = pool.submit(run_observe, ctx["model"], prepared, req)
+            era_f = pool.submit(run_era, ctx["model"], prepared, req)
             observations, obs_usage, room_hints, sent_photos = obs_f.result()
             era, era_usage = era_f.result()
         # Step 1.5 — validate which observations are renovation-supported (uses
         # both observe + era), then Step 2 grounds only the supported ones.
         support, support_usage = run_support(ctx, observations, era, req)
         candidates, cand_usage = run_match(ctx, support, req)
+        # Structural pass — compares the oldest vs newest exterior photo for a
+        # storey/footprint change the finish-based steps can't see; priced as a
+        # deterministic House Extension row.
+        structural, struct_usage = run_structure(
+            ctx["model"], observations, sent_photos, req
+        )
     except openai.OpenAIError as exc:
         raise ModelError(f"Vision model call failed: {exc}") from exc
 
     validated = apply_year_guard(
         candidates.get("validatedCandidates", []), candidates, ctx["property"]
     )
-    core = price_validated(req, ctx, validated, observations)
+    core = price_validated(req, ctx, validated, observations, structural)
+    # Supported renovations the catalog can't price yet are surfaced unpriced +
+    # flagged (never silently dropped), so we can add them to the catalog later.
+    renovations = _format_renovations(core["renovations"]) + [
+        _needs_review_row(f) for f in candidates.get("unmatchedFindings", [])
+    ]
 
     result = {
-        "Renovations": _format_renovations(core["renovations"]),
+        "Renovations": renovations,
         "Renovations Total": _money(core["total"]),
         "Property": ctx["property"],
         "GFA": ctx["gfa"],
         "Summary Description": candidates.get("summary", ""),
         "Disclaimer": DISCLAIMER_WITH_REPAINT if core["paintDecision"]["applied"] else DISCLAIMER,
         # Combined token counts + USD cost across the four model calls.
-        "Usage": merge_usage(obs_usage, era_usage, support_usage, cand_usage),
+        "Usage": merge_usage(obs_usage, era_usage, support_usage, cand_usage, struct_usage),
         "Stages": {
             "observations": observations,
             # Forensic per-element era dating (Step 1b) — the dated fabrication
@@ -94,9 +121,16 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
             # Internal-repaint assumption audit: whether it fired and the per-room
             # areas (from gfa) that made up the assumed paint area.
             "paintAssumption": core["paintDecision"],
+            # Structural-delta pass: the raw old-vs-new exterior comparison and
+            # whether it produced a priced House Extension row (mirrors paintAssumption).
+            "structuralChange": structural,
+            "extensionAssumption": core["extensionDecision"],
             "candidates": {
                 "validatedCandidates": validated,
                 "rejectedCandidates": candidates.get("rejectedCandidates", []),
+                # Supported renovations with no catalog item yet (the needs-review
+                # rows) — the queue of items to add to the catalog.
+                "unmatchedFindings": candidates.get("unmatchedFindings", []),
             },
             "toolInput": [
                 {"_id": e["_id"], "name": e["name"], "area": e["area"], "factor": e["factor"]}
@@ -117,6 +151,7 @@ def build_estimate_v2(req: EstimateRequest) -> dict:
             "eraPromptHash": _hash(get_base_prompt(ERA_PROMPT_FILE)),
             "supportPromptHash": _hash(get_base_prompt(SUPPORT_PROMPT_FILE)),
             "candidatesPromptHash": _hash(get_base_prompt(CANDIDATES_PROMPT_FILE)),
+            "structurePromptHash": _hash(get_base_prompt(STRUCTURE_PROMPT_FILE)),
         },
     }
     if req.settlement_date:

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -26,20 +27,30 @@ from .estimator_v2 import (
     step_price,
     step_support,
 )
+from .estimator_v3 import (
+    build_estimate_v3,
+    step_analyze,
+    step_context as step_context_v3,
+    step_match as step_match_v3,
+    step_price as step_price_v3,
+    step_support as step_support_v3,
+)
 from .chat import build_chat_reply
 from .learning import build_learning_analysis
 from .prompts import get_base_prompt
 from .clients.rpdata_client import build_photos_zip, fetch_photos, search_addresses
 from .runs_db import (
     get_run,
+    list_applied,
     list_chat_messages,
     list_learning,
     list_runs,
     save_chat_message,
     save_learning,
     save_run,
+    set_applied,
 )
-from .schemas import ChatRequest, EstimateRequest, LearnRequest, StepRequest
+from .schemas import AppliedRequest, ChatRequest, EstimateRequest, LearnRequest, StepRequest
 
 app = FastAPI(title="Estimator API", version="1.0.0")
 
@@ -73,6 +84,12 @@ def index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@app.get("/run/{run_id}")
+def run_page(run_id: int) -> FileResponse:
+    """Serve the estimator SPA deep-linked to a saved run."""
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
 @app.get("/playground")
 def playground() -> FileResponse:
     """Serve the step-by-step v2 pipeline playground."""
@@ -83,6 +100,12 @@ def playground() -> FileResponse:
 def learn_page() -> FileResponse:
     """Serve the learning/tuning page (expert ground truth vs a saved run)."""
     return FileResponse(_STATIC_DIR / "learn.html")
+
+
+@app.get("/suggestions")
+def suggestions_page() -> FileResponse:
+    """Serve the aggregated tuning-recommendations page (all runs)."""
+    return FileResponse(_STATIC_DIR / "suggestions.html")
 
 
 @app.get("/health")
@@ -146,7 +169,7 @@ def debug_prompt_v2(req: EstimateRequest, _: None = Depends(require_secret)) -> 
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def _save_run(req: EstimateRequest, result: dict) -> int | None:
+def _save_run(req: EstimateRequest, result: dict, duration_ms: int | None = None) -> int | None:
     """Log the run for later comparison; returns its id (None on failure).
     Best-effort: never break the estimate.
 
@@ -174,6 +197,7 @@ def _save_run(req: EstimateRequest, result: dict) -> int | None:
             settlement_date=req.settlement_date,
             prompt=prompt,
             response=result,
+            duration_ms=duration_ms,
         )
     except Exception:
         return None
@@ -181,6 +205,7 @@ def _save_run(req: EstimateRequest, result: dict) -> int | None:
 
 def _run_estimate(builder, req: EstimateRequest) -> dict:
     """Run an estimate builder, map upstream failures to HTTP, and save the run."""
+    start = time.perf_counter()
     try:
         result = builder(req)
     except (NoPhotosError, MissingBuildYearError) as exc:
@@ -188,7 +213,9 @@ def _run_estimate(builder, req: EstimateRequest) -> dict:
     except (ItemsFetchError, RpDataFetchError, ModelError) as exc:
         # Upstream failed: megamind, calc.duo.tax, or the vision model.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    run_id = _save_run(req, result)
+    duration_ms = round((time.perf_counter() - start) * 1000)
+    result["DurationMs"] = duration_ms  # wall-clock for the run, shown in the UI
+    run_id = _save_run(req, result, duration_ms)
     if run_id is not None:
         result["RunId"] = run_id  # lets the frontend attach a chat thread to this run
     return result
@@ -204,6 +231,13 @@ def estimate_v2(req: EstimateRequest, _: None = Depends(require_secret)):
     """The multi-step (observe -> match -> price) pipeline. Same response shape
     as /estimate, plus a `Stages` debug key."""
     return _run_estimate(build_estimate_v2, req)
+
+
+@app.post("/estimate/v3")
+def estimate_v3(req: EstimateRequest, _: None = Depends(require_secret)):
+    """v3: one master-JSON vision pass (observe+era+structure fused) then the
+    text steps on a cheap model. Same response shape as /estimate/v2."""
+    return _run_estimate(build_estimate_v3, req)
 
 
 def _run_step(fn, req: StepRequest) -> dict:
@@ -248,10 +282,46 @@ def v2_step_price(req: StepRequest, _: None = Depends(require_secret)):
     return _run_step(step_price, req)
 
 
+# Same one-step-at-a-time playground for v3. `analyze` is the single fused vision
+# pass; support/match run on the cheap text model. context/price reuse v2.
+@app.post("/estimate/v3/step/context")
+def v3_step_context(req: StepRequest, _: None = Depends(require_secret)):
+    return _run_step(step_context_v3, req)
+
+
+@app.post("/estimate/v3/step/analyze")
+def v3_step_analyze(req: StepRequest, _: None = Depends(require_secret)):
+    return _run_step(step_analyze, req)
+
+
+@app.post("/estimate/v3/step/support")
+def v3_step_support(req: StepRequest, _: None = Depends(require_secret)):
+    return _run_step(step_support_v3, req)
+
+
+@app.post("/estimate/v3/step/match")
+def v3_step_match(req: StepRequest, _: None = Depends(require_secret)):
+    return _run_step(step_match_v3, req)
+
+
+@app.post("/estimate/v3/step/price")
+def v3_step_price(req: StepRequest, _: None = Depends(require_secret)):
+    return _run_step(step_price_v3, req)
+
+
 @app.get("/runs")
 def runs(rpId: str | None = Query(default=None)) -> dict:
     """Saved estimate runs (newest first). Omit rpId to list every property's runs."""
     return {"runs": list_runs(rpId)}
+
+
+@app.get("/runs/{run_id}")
+def run_by_id(run_id: int) -> dict:
+    """One saved run by id (with its full response)."""
+    run = get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
+    return {"run": run}
 
 
 @app.post("/learn/analyze")
@@ -273,6 +343,19 @@ def learn_analyze(req: LearnRequest, _: None = Depends(require_secret)) -> dict:
 def learn_sessions(runId: int | None = Query(default=None)) -> dict:
     """Saved learning sessions (newest first). Omit runId for all."""
     return {"sessions": list_learning(runId)}
+
+
+@app.get("/learn/applied")
+def applied() -> dict:
+    """Keys ("sessionId:recIndex") of tuning recs marked applied by hand."""
+    return {"applied": list_applied()}
+
+
+@app.post("/learn/applied")
+def set_applied_rec(req: AppliedRequest) -> dict:
+    """Mark/unmark one tuning recommendation as applied."""
+    set_applied(req.session_id, req.rec_index, req.applied)
+    return {"ok": True}
 
 
 @app.get("/chat")

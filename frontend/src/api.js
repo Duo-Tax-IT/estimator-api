@@ -28,10 +28,16 @@ export const photosDownloadUrl = (rpId) => `/photos/download?rpId=${encodeURICom
 export const getRuns = (rpId, secret) =>
   get(rpId ? `/runs?rpId=${encodeURIComponent(rpId)}` : "/runs", secret).then((d) => d.runs || []);
 
-export const estimate = (version, body, secret) =>
-  post(version === "v2" ? "/estimate/v2" : "/estimate", body, secret);
+export const getRun = (id, secret) =>
+  get(`/runs/${encodeURIComponent(id)}`, secret).then((d) => d.run);
 
-export const v2Step = (name, body, secret) => post(`/estimate/v2/step/${name}`, body, secret);
+const ESTIMATE_PATHS = { v2: "/estimate/v2", v3: "/estimate/v3" };
+export const estimate = (version, body, secret) =>
+  post(ESTIMATE_PATHS[version] || "/estimate", body, secret);
+
+// One playground step for a given pipeline version (v2 or v3).
+export const pipelineStep = (version, name, body, secret) =>
+  post(`/estimate/${version}/step/${name}`, body, secret);
 
 export const learnAnalyze = (body, secret) =>
   post("/learn/analyze", body, secret).then((d) => d.analysis);
@@ -46,6 +52,11 @@ export const getChat = (runId, secret) =>
 export const getSessions = (runId, secret) =>
   get(runId ? `/learn/sessions?runId=${encodeURIComponent(runId)}` : "/learn/sessions", secret)
     .then((d) => d.sessions || []);
+
+// Applied-flag for tuning recommendations. Keys are "sessionId:recIndex".
+export const getApplied = (secret) => get("/learn/applied", secret).then((d) => d.applied || []);
+export const markApplied = (sessionId, recIndex, applied, secret) =>
+  post("/learn/applied", { sessionId, recIndex, applied }, secret);
 
 // Prompt preview returns plain text (not JSON) and has its own error shape.
 export async function previewPrompt(version, body, secret) {

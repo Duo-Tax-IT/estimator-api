@@ -14,7 +14,7 @@ const api = ["/search", "/estimate", "/photos", "/runs", "/debug", "/learn/", "/
 const cleanUrls = () => ({
   name: "clean-urls",
   configureServer(server) {
-    const map = { "/playground": "/playground.html", "/learn": "/learn.html" };
+    const map = { "/playground": "/playground.html", "/learn": "/learn.html", "/suggestions": "/suggestions.html" };
     server.middlewares.use((req, _res, next) => {
       if (map[req.url]) req.url = map[req.url];
       next();
@@ -33,6 +33,7 @@ export default defineConfig({
         index: resolve(__dirname, "index.html"),
         playground: resolve(__dirname, "playground.html"),
         learn: resolve(__dirname, "learn.html"),
+        suggestions: resolve(__dirname, "suggestions.html"),
       },
     },
   },

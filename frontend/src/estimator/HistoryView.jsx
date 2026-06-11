@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { fmtDuration } from "@/lib/money";
 import { useEstimator } from "./store";
 import CompareMatrix from "./CompareMatrix";
 import RpDataLink from "@/components/RpDataLink";
@@ -99,6 +100,7 @@ export default function HistoryView() {
                       <TableCell>
                         <div>{r.model || "—"}</div>
                         {settings && <div className="text-xs text-muted-foreground">{settings}</div>}
+                        {r.duration_ms != null && <div className="text-xs text-muted-foreground">{fmtDuration(r.duration_ms)}</div>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{resp["Renovations Total"] || ""}</TableCell>
                       <TableCell className="text-right tabular-nums">{renos.length}</TableCell>

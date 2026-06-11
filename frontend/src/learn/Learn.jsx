@@ -101,6 +101,7 @@ export default function Learn() {
         <div className="max-w-[1100px] mx-auto px-6 h-16 flex items-center gap-3">
           <span className="font-semibold tracking-tight">Learning — tune from expert feedback</span>
           <a href="/" className="btn-soft ml-auto">← Estimator</a>
+          <a href="/suggestions" className="btn-soft">Recommendations →</a>
           <a href="/playground" className="btn-soft">Playground →</a>
         </div>
       </header>

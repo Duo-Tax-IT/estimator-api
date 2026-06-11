@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import pytest
 
@@ -28,6 +29,11 @@ def _patch_upstreams(monkeypatch, items=SAMPLE_ITEMS, photos=None, property=None
     monkeypatch.setattr(estimator_v2.context, "fetch_photos", lambda rp_id: photos)
     # Dedup downloads images to hash them; keep the pipeline tests offline.
     monkeypatch.setattr(estimator_v2.context, "dedup_photos", lambda photos: photos)
+    # prepare_photos downloads + classifies; stub it (observe/era are patched too).
+    monkeypatch.setattr(estimator_v2, "prepare_photos", lambda photos: [
+        {"photoIndex": i, "data_url": "d", "url": p.url, "date": p.date, "prediction": None}
+        for i, p in enumerate(photos)
+    ])
 
 
 def _patch_stages(monkeypatch, observations, candidates, era=None, support=None):
@@ -338,3 +344,141 @@ def test_internal_paint_can_still_be_disabled_explicitly():
         [], _FRESH_PAINT, {"yearBuilt": "2000"}, {"assumeInternalRepaint": False}, _GFA, _PAINT_LIB
     )
     assert decision == {"applied": False, "reason": "disabled"}
+
+
+_NEW_LIKE_PAINT = {"photoObservations": [{"roomType": "living", "condition": "new_like"}]}
+_BRAND_NEW = {"yearBuilt": str(date.today().year - 1)}
+_YOUNG = {"yearBuilt": str(date.today().year - 5)}  # past brand-new, under REPAINT_MIN_AGE
+
+
+def test_internal_paint_skipped_on_brand_new_build():
+    _, d = estimator_v2._internal_paint_row(
+        [], _NEW_LIKE_PAINT, _BRAND_NEW, {}, _GFA, _PAINT_LIB
+    )
+    assert d["applied"] is False and "brand-new" in d["reason"]
+
+
+def test_internal_paint_skipped_on_young_unrenovated_property():
+    _, d = estimator_v2._internal_paint_row(
+        [], _NEW_LIKE_PAINT, _YOUNG, {}, _GFA, _PAINT_LIB
+    )
+    assert d["applied"] is False and "no other renovations" in d["reason"]
+
+
+def test_internal_paint_applies_on_young_renovated_property_with_fresh_paint():
+    row, d = estimator_v2._internal_paint_row(
+        [{"_id": "other-item"}], _NEW_LIKE_PAINT, _YOUNG, {}, _GFA, _PAINT_LIB
+    )
+    assert d["applied"] is True and row["name"] == "Painting - Internal"
+
+
+# ── Structural delta → deterministic House Extension row ──
+from app.estimator_v2.price import _extension_row
+from app.estimator_v2.steps.structure import _exterior_pair
+
+_EXT_LIB = {"h": {"_id": "h", "name": "House Extension", "defaultRate": 2675,
+                  "unit": "sqm", "parentId": None, "parentName": None}}
+
+
+def test_exterior_pair_picks_oldest_and_newest_dated_exterior():
+    obs = {"photoObservations": [
+        {"photoIndex": 0, "roomType": "exterior"},
+        {"photoIndex": 1, "roomType": "kitchen"},
+        {"photoIndex": 2, "roomType": "exterior"},
+    ]}
+    sent = [
+        {"photoIndex": 0, "url": "old", "date": "2005-01-01"},
+        {"photoIndex": 1, "url": "k", "date": "2020-01-01"},
+        {"photoIndex": 2, "url": "new", "date": "2020-06-01"},
+    ]
+    older, newer = _exterior_pair(obs, sent)
+    assert older["url"] == "old" and newer["url"] == "new"
+
+
+def test_exterior_pair_none_without_two_distinct_dates():
+    obs = {"photoObservations": [{"photoIndex": 0, "roomType": "exterior"}]}
+    sent = [{"photoIndex": 0, "url": "a", "date": "2005-01-01"}]
+    assert _exterior_pair(obs, sent) is None
+
+
+def test_extension_row_prices_added_area_capexempt():
+    structural = {"secondStoreyAdded": True, "oldStoreys": 1, "newStoreys": 2,
+                  "estimatedAddedAreaSqm": 70, "estimatedYear": "2018"}
+    row, decision = _extension_row(structural, {"yearBuilt": "1990"}, "NSW", {}, _EXT_LIB)
+    assert decision["applied"] is True
+    assert row["_id"] == "h" and row["area"] == 70.0 and row["capExempt"] is True
+
+
+def test_extension_row_skipped_when_addition_predates_build():
+    # estimatedYear <= yearBuilt: that's the original build, not an extension.
+    row, decision = _extension_row(
+        {"secondStoreyAdded": True, "estimatedAddedAreaSqm": 70, "estimatedYear": "1980"},
+        {"yearBuilt": "1990"}, "NSW", {}, _EXT_LIB,
+    )
+    assert row is None and decision["applied"] is False
+
+
+def test_extension_row_skipped_when_no_area_increase():
+    row, _ = _extension_row(
+        {"estimatedAddedAreaSqm": 0}, {"yearBuilt": "1990"}, "NSW", {}, _EXT_LIB
+    )
+    assert row is None
+
+
+def test_v2_supported_but_uncatalogued_finding_surfaces_as_needs_review(monkeypatch):
+    _patch_upstreams(monkeypatch)
+    candidates = {
+        "validatedCandidates": [],
+        "rejectedCandidates": [],
+        "unmatchedFindings": [
+            {"observedItem": "Solar panel system", "roomType": "exterior",
+             "estimatedYear": "2019", "reason": "no solar item in catalog", "evidence": ""},
+        ],
+        "summary": "",
+    }
+    _patch_stages(monkeypatch, {"photoObservations": []}, candidates)
+
+    out = estimator_v2.build_estimate_v2(_req())
+    review = [r for r in out["Renovations"] if r.get("needsReview")]
+    assert len(review) == 1
+    assert review[0]["Name"] == "Solar panel system" and review[0]["Year"] == "2019"
+    assert "FinalCost" not in review[0]            # unpriced — never grounded to a catalog item
+    assert out["Renovations Total"] == "$0.00"     # flagged rows don't affect the total
+    assert out["Stages"]["candidates"]["unmatchedFindings"][0]["observedItem"] == "Solar panel system"
+
+
+def test_v2_structural_extension_adds_priced_house_extension_row(monkeypatch):
+    items = [{"_id": "h", "name": "House Extension", "defaultRate": 2675,
+              "unit": "sqm", "defaultQuantity": None, "parentName": None}]
+    photos = [Photo(url="https://x/old", date="2005-01-01"),
+              Photo(url="https://x/new", date="2020-01-01")]
+    # livingSpace = 86 − (2·12 + 1·6 + kitchen 8) = 48.
+    _patch_upstreams(monkeypatch, items=items, photos=photos,
+                     property={"floorArea": 86, "beds": "2", "baths": "1", "yearBuilt": "1990"})
+    observations = {"photoObservations": [
+        {"photoIndex": 0, "roomType": "exterior"},
+        {"photoIndex": 1, "roomType": "exterior"},
+    ]}
+    sent = [{"photoIndex": 0, "url": "https://x/old", "date": "2005-01-01"},
+            {"photoIndex": 1, "url": "https://x/new", "date": "2020-01-01"}]
+    monkeypatch.setattr(estimator_v2.steps.observe, "observe_photos",
+                        lambda *a, **k: (json.dumps(observations), {}, [], sent))
+    monkeypatch.setattr(estimator_v2.steps.era, "analyze_era",
+                        lambda *a, **k: (json.dumps({"eraAnalysis": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.support, "assess_support",
+                        lambda *a, **k: (json.dumps({"renovationSupportFindings": []}), {}))
+    monkeypatch.setattr(estimator_v2.steps.match, "match_candidates",
+                        lambda *a, **k: (json.dumps({"validatedCandidates": [], "rejectedCandidates": [], "summary": ""}), {}))
+    monkeypatch.setattr(estimator_v2.steps.structure, "compare_structure",
+                        lambda *a, **k: (json.dumps({"secondStoreyAdded": True, "oldStoreys": 1, "newStoreys": 2,
+                                                     "estimatedAddedAreaSqm": 70, "estimatedYear": "2018",
+                                                     "confidence": "high", "evidence": ["second storey in newer photo"]}), {}))
+    out = estimator_v2.build_estimate_v2(_req())
+    ext = [r for r in out["Renovations"] if r["Name"] == "House Extension"]
+    assert len(ext) == 1
+    # capExempt: NOT scaled to livingSpace (48) — full 70 m² × 2675.
+    assert ext[0]["Quantity"] == 70
+    assert ext[0]["FinalCost"] == "$187,250.00"
+    assert ext[0]["Year"] == "2018"
+    assert out["Stages"]["extensionAssumption"]["applied"] is True
+    assert out["Stages"]["structuralChange"]["secondStoreyAdded"] is True

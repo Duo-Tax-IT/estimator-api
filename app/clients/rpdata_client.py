@@ -149,6 +149,35 @@ def fetch_property(rp_id: str) -> dict:
     return merged
 
 
+def extract_sale(payload: dict) -> dict | None:
+    """The property's last sale from an rpdata payload, or None.
+
+    Narrows rpdata's `lastSale` block to the fields that inform an estimate: the
+    price, the contract/settlement dates, and whether it was an arms-length
+    (genuine market) transaction. Returns None when no priced sale is present.
+    """
+    sale = payload.get("lastSale")
+    if not isinstance(sale, dict) or not sale.get("price"):
+        return None
+    return {
+        "price": int(sale["price"]),
+        "contractDate": sale.get("contractDate"),
+        "settlementDate": sale.get("settlementDate"),
+        "isArmsLength": sale.get("isArmsLength"),
+    }
+
+
+def fetch_sale(rp_id: str) -> dict | None:
+    """Fetch a property's last sale from rpdata by rp_id (None if no sale)."""
+    payload = _get_json(_property_url(rp_id), rp_id, "sale")
+    if not isinstance(payload, dict):
+        raise RpDataFetchError(
+            f"RP Data API returned {type(payload).__name__}, expected an object, "
+            f"for rp_id {rp_id}"
+        )
+    return extract_sale(payload)
+
+
 def _map_photos(items: list[dict]) -> list[Photo]:
     """Map the rpdata payload into the Photo shape the model consumes.
 

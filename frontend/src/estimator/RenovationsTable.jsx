@@ -58,8 +58,11 @@ export default function RenovationsTable({ interactive = false, renos: renosProp
 
           const r = row.item;
           return (
-            <TableRow key={j}>
-              <TableCell style={pad}>{r.Name ?? ""}</TableCell>
+            <TableRow key={j} className={r.needsReview ? "text-muted-foreground" : undefined}>
+              <TableCell style={pad}>
+                {r.Name ?? ""}
+                {r.needsReview && <span className="ml-2 text-xs">needs review · not in catalog</span>}
+              </TableCell>
               <TableCell>{r.Year ?? ""}</TableCell>
               <TableCell>{r.Owner ?? ""}</TableCell>
               <TableCell className="text-right tabular-nums">{r.Quantity ?? ""}</TableCell>

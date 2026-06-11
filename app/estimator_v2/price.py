@@ -9,6 +9,7 @@ from ..schemas import EstimateRequest
 # An old property whose interior paint reads sound is assumed repainted, sized from
 # the per-room areas already in `gfa`.
 REPAINT_MIN_AGE = 10
+NEW_BUILD_MAX_AGE = 2  # builds this recent never get the repaint assumption
 INTERNAL_PAINT_NAME = "Painting - Internal"
 # observe `roomType` -> the `gfa` bucket holding that type's area. living/laundry
 # have no own bucket — their area sits inside the leftover livingSpace.
@@ -20,8 +21,9 @@ _PAINT_AREA_KEY = {
 DISCLAIMER_WITH_REPAINT = (
     "This assessment is based on visual analysis of provided images and a "
     f"predefined renovation item dataset, plus an assumed internal repaint for "
-    f"properties over {REPAINT_MIN_AGE} years old whose interior paint appears "
-    "sound. The repaint is an assumption, not confirmed from the images."
+    f"properties over {REPAINT_MIN_AGE} years old, or younger renovated "
+    "properties whose interior paint appears fresh. The repaint is an "
+    "assumption, not confirmed from the images."
 )
 
 
@@ -29,10 +31,12 @@ def _internal_paint_row(validated, observations, property_data, config, gfa, lib
     """A synthetic 'Painting - Internal' detected-row when the repaint assumption
     applies, plus a decision record for Stages; (None, decision) otherwise.
 
-    Gated on: config opt-in, and the model seeing visibly sound paint in a room
-    type. Age is not a hard gate — genuine fresh paint (`new_like`) counts at any
-    age, while merely-`clean` paint only counts on an older property (the QS
-    convention). The area reuses the per-room buckets already computed in `gfa`.
+    Gated on config opt-in, then an age/renovation ladder: a brand-new build
+    never gets the assumption (fresh paint is the original finish); an old
+    property gets it by QS convention (rooms count unless visibly worn/poor);
+    a young property gets it only when other renovations exist AND paint reads
+    `new_like` (the repaint rode along with the reno). The area reuses the
+    per-room buckets already computed in `gfa`.
     Year is left unknown (BCI factor 1.0, current-owner by default); `capExempt`
     keeps it out of the livingSpace sqm cap so it can't shrink real flooring.
     """
@@ -40,20 +44,26 @@ def _internal_paint_row(validated, observations, property_data, config, gfa, lib
     # estimates need); send assumeInternalRepaint=false to opt out.
     if not config.get("assumeInternalRepaint", True):
         return None, {"applied": False, "reason": "disabled"}
-    # Age is not a hard gate: a genuine fresh-paint read (`new_like`) counts at any
-    # age, while a merely-`clean` read (sound but ambiguous — could be a new build's
-    # original paint) only counts on an older property, where sound paint implies a
-    # repaint.
     built = str(property_data.get("yearBuilt", "")).strip()
-    old = built.isdigit() and date.today().year - int(built) >= REPAINT_MIN_AGE
-    fresh = ("clean", "new_like") if old else ("new_like",)
+    age = date.today().year - int(built) if built.isdigit() else None
+    # Brand-new build: fresh paint is the builder's original finish.
+    if age is not None and age <= NEW_BUILD_MAX_AGE:
+        return None, {"applied": False, "reason": f"brand-new build ({built})"}
+    old = age is None or age >= REPAINT_MIN_AGE
+    # A young property only gets the assumption when other renovations exist —
+    # a repaint then plausibly rode along with the reno.
+    if not old and not validated:
+        return None, {"applied": False, "reason": f"young property ({built}), no other renovations"}
+    # Old: QS convention — any room not visibly worn/poor counts, cues or not.
+    # Young-but-renovated: only rooms that actually read new_like count.
+    fresh = ("average", "clean", "new_like", "unknown") if old else ("new_like",)
     paint = next((it for it in library.values() if it["name"] == INTERNAL_PAINT_NAME), None)
     if not paint or not gfa:
         return None, {"applied": False, "reason": "no paint item or no gfa"}
     if any(c.get("_id") == paint["_id"] for c in validated):
         return None, {"applied": False, "reason": "already detected by model"}
-    # Room types whose photos show fresh paint (none worn/poor); `fresh` is the
-    # accepted conditions for this property's age (new_like always; clean if old).
+    # Room types whose photos pass the gate (none worn/poor); `fresh` is the
+    # accepted conditions for this rung of the ladder.
     keys, rooms = set(), []
     for room_type, key in _PAINT_AREA_KEY.items():
         shots = [
@@ -77,6 +87,35 @@ def _internal_paint_row(validated, observations, property_data, config, gfa, lib
         "applied": True, "reason": f"fresh paint in {rooms}",
         "rooms": rooms, "areas": areas, "totalArea": total,
     }
+    return row, decision
+
+
+EXTENSION_NAME = "House Extension"
+
+
+def _extension_row(structural, property_data, state, factors, library):
+    """A deterministic 'House Extension' sqm row when the structural step finds a
+    storey/footprint increase the finish-based steps can't see. Mirrors the paint
+    assumption: sized off the model's added-area estimate, `capExempt` so it
+    neither shrinks nor is shrunk by the livingSpace floor cap. (None, decision)
+    otherwise. Guarded like the year-guard: an addition dated at/before the build
+    is the original build, not an extension."""
+    added = float(structural.get("estimatedAddedAreaSqm") or 0)
+    storeys_up = (structural.get("newStoreys") or 0) - (structural.get("oldStoreys") or 0)
+    detected = structural.get("secondStoreyAdded") or storeys_up >= 1 or structural.get("majorExtension")
+    if not detected or added <= 0:
+        return None, {"applied": False, "reason": "no structural area increase"}
+    year, built = str(structural.get("estimatedYear") or ""), str(property_data.get("yearBuilt", "")).strip()
+    if year.isdigit() and built.isdigit() and int(year) <= int(built):
+        return None, {"applied": False, "reason": f"estimatedYear {year} <= yearBuilt {built}"}
+    item = next((it for it in library.values() if it["name"] == EXTENSION_NAME), None)
+    if not item:
+        return None, {"applied": False, "reason": f"no '{EXTENSION_NAME}' catalog item"}
+    row = {"_id": item["_id"], "name": item["name"], "area": added,
+           "factor": _bci_factor(state, year, factors), "Year": year, "capExempt": True}
+    decision = {"applied": True, "reason": f"second-storey/extension (+{added} m²)",
+                "area": added, "year": year, "confidence": structural.get("confidence"),
+                "evidence": structural.get("evidence", [])}
     return row, decision
 
 
@@ -104,7 +143,8 @@ def apply_year_guard(validated: list, candidates: dict, property_data: dict) -> 
 
 
 def price_validated(
-    req: EstimateRequest, ctx: dict, validated: list, observations: dict
+    req: EstimateRequest, ctx: dict, validated: list, observations: dict,
+    structural: dict | None = None,
 ) -> dict:
     """Step 3 — price (deterministic; same expand/dedup/price path as v1).
 
@@ -134,6 +174,14 @@ def price_validated(
     )
     if paint_row:
         detected.append(paint_row)
+    # Structural addition (second storey / extension): a deterministic capExempt
+    # House Extension row the finish-based steps can't surface, sized off the
+    # structural step's added-area estimate.
+    ext_row, ext_decision = _extension_row(
+        structural or {}, property_data, state, factors, library
+    )
+    if ext_row:
+        detected.append(ext_row)
     detected = dedup_by_id(expand_to_leaves(detected, library))
     priced = price_items(detected, library, living)
     renovations = priced["renovations"]
@@ -152,4 +200,5 @@ def price_validated(
         "state": state,
         "factors": factors,
         "paintDecision": paint_decision,
+        "extensionDecision": ext_decision,
     }

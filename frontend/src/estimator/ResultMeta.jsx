@@ -2,10 +2,11 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import PhotoCarousel from "@/components/PhotoCarousel";
 import RpDataLink from "@/components/RpDataLink";
-import { fmtMoney } from "@/lib/money";
+import { fmtMoney, fmtDuration } from "@/lib/money";
 import { scaledTotal } from "@/lib/renovations";
 import { useEstimator } from "./store";
 import DebugTabs from "./DebugTabs";
+import Candidates from "./Candidates";
 import ChatPanel from "./ChatPanel";
 
 // Left-column result summary: who/which, photos, total, summary, debug, runs.
@@ -29,6 +30,7 @@ export default function ResultMeta() {
           Showing estimate for <strong className="text-foreground">{selected.suggestion}</strong>
           <span className="px-2 opacity-40">·</span>rp_id {selected.suggestionId}
           <span className="px-2 opacity-40">·</span>{version}
+          {result.DurationMs != null && <><span className="px-2 opacity-40">·</span>{fmtDuration(result.DurationMs)}</>}
           <span className="px-2 opacity-40">·</span><RpDataLink rpId={selected.suggestionId} />
         </p>
         <div className="flex items-center gap-2">
@@ -52,6 +54,8 @@ export default function ResultMeta() {
       )}
 
       <DebugTabs />
+
+      <Candidates />
 
       {disclaimer && <p className="text-xs text-muted-foreground leading-relaxed">{disclaimer}</p>}
 
@@ -82,7 +86,8 @@ function SavedRuns() {
           <TableHeader>
             <TableRow>
               <TableHead>When</TableHead><TableHead>Label</TableHead><TableHead>Model</TableHead>
-              <TableHead>Settings</TableHead><TableHead className="text-right">Total</TableHead><TableHead>Items</TableHead>
+              <TableHead>Settings</TableHead><TableHead className="text-right">Total</TableHead>
+              <TableHead className="text-right">Took</TableHead><TableHead>Items</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -95,6 +100,7 @@ function SavedRuns() {
                   <TableCell>{r.model || ""}</TableCell>
                   <TableCell>{c.settings}</TableCell>
                   <TableCell className="text-right tabular-nums">{c.resp["Renovations Total"] || ""}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{fmtDuration(r.duration_ms)}</TableCell>
                   <TableCell>{(c.resp.Renovations || []).length}<div className="text-xs text-muted-foreground">{c.names}</div></TableCell>
                 </TableRow>
               );
