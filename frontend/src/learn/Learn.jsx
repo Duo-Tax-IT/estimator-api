@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import TopBar from "@/components/TopBar";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import PhotoCarousel from "@/components/PhotoCarousel";
 
@@ -97,14 +98,7 @@ export default function Learn() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-xl">
-        <div className="max-w-[1100px] mx-auto px-6 h-16 flex items-center gap-3">
-          <span className="font-semibold tracking-tight">Learning — tune from expert feedback</span>
-          <a href="/" className="btn-soft ml-auto">← Estimator</a>
-          <a href="/suggestions" className="btn-soft">Recommendations →</a>
-          <a href="/playground" className="btn-soft">Playground →</a>
-        </div>
-      </header>
+      <TopBar />
 
       <main className="max-w-[1100px] mx-auto p-5">
         <div className="grid grid-cols-[2fr_1fr] gap-x-4 gap-y-2.5 mb-4">

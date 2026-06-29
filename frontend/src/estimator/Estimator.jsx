@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
 import AddressSearch from "@/components/AddressSearch";
+import TopBar from "@/components/TopBar";
 import { useEstimator } from "./store";
 import OverridePanel from "./OverridePanel";
 import RunControls from "./RunControls";
@@ -26,16 +27,7 @@ export default function Estimator() {
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-xl">
-        <div className="max-w-[1180px] mx-auto px-6 h-16 flex items-center justify-between">
-          <span className="font-semibold tracking-tight">Renovation Estimator</span>
-          <nav className="flex items-center gap-1">
-            <a href="/playground" className="btn-soft">Playground</a>
-            <a href="/learn" className="btn-soft">Learning</a>
-            <a href="/suggestions" className="btn-soft">Recommendations</a>
-          </nav>
-        </div>
-      </header>
+      <TopBar />
 
       <main className="max-w-[1180px] mx-auto px-6 py-8">
         <Tabs value={tab} onValueChange={setTab}>

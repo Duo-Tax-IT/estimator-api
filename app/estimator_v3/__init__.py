@@ -15,7 +15,7 @@ from ..prompts import get_base_prompt
 from ..schemas import EstimateRequest, StepRequest
 from ..estimator_v2 import DISCLAIMER, DISCLAIMER_WITH_REPAINT, _hash, _needs_review_row
 from ..estimator_v2.context import fetch_v2_context
-from ..estimator_v2.price import apply_year_guard, price_validated
+from ..estimator_v2.price import GUT_DISCLAIMER, apply_year_guard, price_validated
 from ..estimator_v2.steps import (
     CANDIDATES_PROMPT_FILE, SUPPORT_PROMPT_FILE, run_match, run_support,
 )
@@ -49,6 +49,7 @@ def build_estimate_v3(req: EstimateRequest) -> dict:
         observations = {"photoObservations": analysis.get("photoObservations", [])}
         era = {"eraAnalysis": analysis.get("eraAnalysis", [])}
         structural = analysis.get("structureAnalysis") or {}
+        gut = analysis.get("gutRenovation") or {}
         # Text-only reasoning over the master JSON, on the cheap text model.
         support, support_usage = run_support(text_ctx, observations, era, req)
         candidates, cand_usage = run_match(text_ctx, support, req)
@@ -58,9 +59,15 @@ def build_estimate_v3(req: EstimateRequest) -> dict:
     validated = apply_year_guard(
         candidates.get("validatedCandidates", []), candidates, ctx["property"]
     )
-    core = price_validated(req, ctx, validated, observations, structural)
+    core = price_validated(req, ctx, validated, observations, structural, gut)
+    # Not-in-catalog renovations surface as unpriced needs-review rows. On a gut
+    # reno the recorded build year is unreliable, so the year-guard's rejects join
+    # them — flagged for manual judgement, never auto-priced.
+    needs_review = list(candidates.get("unmatchedFindings", []))
+    if gut.get("detected"):
+        needs_review += candidates.get("yearGuardRejected", [])
     renovations = _format_renovations(core["renovations"]) + [
-        _needs_review_row(f) for f in candidates.get("unmatchedFindings", [])
+        _needs_review_row(f) for f in needs_review
     ]
 
     result = {
@@ -69,7 +76,10 @@ def build_estimate_v3(req: EstimateRequest) -> dict:
         "Property": ctx["property"],
         "GFA": ctx["gfa"],
         "Summary Description": candidates.get("summary", ""),
-        "Disclaimer": DISCLAIMER_WITH_REPAINT if core["paintDecision"]["applied"] else DISCLAIMER,
+        "Disclaimer": (
+            (DISCLAIMER_WITH_REPAINT if core["paintDecision"]["applied"] else DISCLAIMER)
+            + (" " + GUT_DISCLAIMER if core["gutDecision"]["applied"] else "")
+        ),
         # One vision call + two cheap text calls (vs v2's four+ vision calls).
         "Usage": merge_usage(analysis_usage, support_usage, cand_usage),
         "Stages": {
@@ -77,8 +87,13 @@ def build_estimate_v3(req: EstimateRequest) -> dict:
             "eraAnalysis": era,
             "renovationSupport": support,
             "roomHints": room_hints,
+            # The model's own dwelling-type read from the photos — an audit
+            # signal against rpdata's propertyType, which can be wrong.
+            "propertyType": analysis.get("propertyType") or {},
             "paintAssumption": core["paintDecision"],
             "structuralChange": structural,
+            "gutRenovation": gut,
+            "gutEstimate": core["gutDecision"],
             "extensionAssumption": core["extensionDecision"],
             "candidates": {
                 "validatedCandidates": validated,

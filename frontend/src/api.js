@@ -31,6 +31,13 @@ export const getRuns = (rpId, secret) =>
 export const getRun = (id, secret) =>
   get(`/runs/${encodeURIComponent(id)}`, secret).then((d) => d.run);
 
+// Pipeline run-harness results (Postgres), for the /training viewer.
+export const getTrainingEstimates = (secret) =>
+  get("/training/estimates", secret).then((d) => d.estimates || []);
+
+export const getTrainingEstimate = (id, secret) =>
+  get(`/training/estimates/${encodeURIComponent(id)}`, secret).then((d) => d.estimate);
+
 const ESTIMATE_PATHS = { v2: "/estimate/v2", v3: "/estimate/v3" };
 export const estimate = (version, body, secret) =>
   post(ESTIMATE_PATHS[version] || "/estimate", body, secret);

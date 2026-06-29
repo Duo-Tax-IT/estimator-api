@@ -1,68 +1,62 @@
 import json
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 
-# Temp/throwaway store for estimate runs, used to compare versions while tuning.
-# Lives at the service root; git-ignored.
-_DB = Path(__file__).parent.parent / "runs.db"
+import psycopg
+
+from .config import get_settings
+
+# Store for estimate runs, the learning loop, and diagnostic chat. Lives in the
+# same Postgres as the training harness (TRAINING_DB_URL); separate tables.
+_initialized = False
+
+_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS runs (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        rp_id TEXT NOT NULL,
+        model TEXT,
+        reasoning_effort TEXT,
+        temperature DOUBLE PRECISION,
+        label TEXT,
+        address TEXT,
+        config TEXT,
+        settlement_date TEXT,
+        prompt TEXT,
+        response TEXT NOT NULL,
+        duration_ms INTEGER
+    )""",
+    """CREATE TABLE IF NOT EXISTS learning_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        run_id BIGINT NOT NULL,
+        expert_input TEXT NOT NULL,
+        analysis TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS chat_messages (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        run_id BIGINT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS applied_recs (
+        session_id BIGINT NOT NULL,
+        rec_index INTEGER NOT NULL,
+        PRIMARY KEY (session_id, rec_index)
+    )""",
+)
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            rp_id TEXT NOT NULL,
-            model TEXT,
-            reasoning_effort TEXT,
-            temperature REAL,
-            label TEXT,
-            address TEXT,
-            config TEXT,
-            settlement_date TEXT,
-            prompt TEXT,
-            response TEXT NOT NULL,
-            duration_ms INTEGER
-        )"""
-    )
-    # Backfill columns added after a DB was created (throwaway store, no migrations).
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(runs)")]
-    for col in ("address", "config", "settlement_date"):
-        if col not in cols:
-            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
-    if "duration_ms" not in cols:
-        conn.execute("ALTER TABLE runs ADD COLUMN duration_ms INTEGER")
-    # Learning loop: an expert's ground truth + the AI's tuning analysis for a run.
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS learning_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            run_id INTEGER NOT NULL,
-            expert_input TEXT NOT NULL,
-            analysis TEXT NOT NULL
-        )"""
-    )
-    # Diagnostic chat: the multi-turn thread for a run (one row per message).
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            run_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL
-        )"""
-    )
-    # Which tuning recommendations the user has already applied by hand. A row's
-    # presence = applied; (session_id, rec_index) points at one rec in a session.
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS applied_recs (
-            session_id INTEGER NOT NULL,
-            rec_index INTEGER NOT NULL,
-            PRIMARY KEY (session_id, rec_index)
-        )"""
-    )
+def _conn() -> psycopg.Connection:
+    """Connect to Postgres, creating the tables once per process (idempotent).
+    The connection commits + closes when used as a `with` context."""
+    global _initialized
+    conn = psycopg.connect(get_settings().training_db_url)
+    if not _initialized:
+        for stmt in _SCHEMA:
+            conn.execute(stmt)
+        conn.commit()
+        _initialized = True
     return conn
 
 
@@ -74,7 +68,7 @@ def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, respons
             "INSERT INTO runs (created_at, rp_id, model, reasoning_effort,"
             " temperature, label, address, config, settlement_date, prompt, response,"
             " duration_ms)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 datetime.now(timezone.utc).isoformat(),
                 rp_id, model, reasoning_effort, temperature, label, address,
@@ -82,7 +76,7 @@ def save_run(rp_id, model, reasoning_effort, temperature, label, prompt, respons
                 prompt, json.dumps(response), duration_ms,
             ),
         )
-        return cur.lastrowid
+        return cur.fetchone()[0]
 
 
 def get_run(run_id) -> dict | None:
@@ -91,7 +85,7 @@ def get_run(run_id) -> dict | None:
         r = conn.execute(
             "SELECT id, created_at, rp_id, model, reasoning_effort, temperature,"
             " label, address, config, settlement_date, prompt, response, duration_ms"
-            " FROM runs WHERE id = ?",
+            " FROM runs WHERE id = %s",
             (run_id,),
         ).fetchone()
     if not r:
@@ -110,16 +104,16 @@ def save_learning(run_id, expert_input, analysis) -> int:
     with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO learning_sessions (created_at, run_id, expert_input, analysis)"
-            " VALUES (?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s) RETURNING id",
             (datetime.now(timezone.utc).isoformat(), run_id, expert_input,
              json.dumps(analysis)),
         )
-        return cur.lastrowid
+        return cur.fetchone()[0]
 
 
 def list_learning(run_id=None) -> list[dict]:
     """Saved learning sessions, newest first. All runs when run_id is None."""
-    where = "WHERE run_id = ?" if run_id else ""
+    where = "WHERE run_id = %s" if run_id else ""
     params = (run_id,) if run_id else ()
     with _conn() as conn:
         rows = conn.execute(
@@ -138,10 +132,11 @@ def save_chat_message(run_id, role, content) -> int:
     """Append one chat message (role: 'user' | 'assistant') for a run; returns id."""
     with _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO chat_messages (created_at, run_id, role, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO chat_messages (created_at, run_id, role, content)"
+            " VALUES (%s, %s, %s, %s) RETURNING id",
             (datetime.now(timezone.utc).isoformat(), run_id, role, content),
         )
-        return cur.lastrowid
+        return cur.fetchone()[0]
 
 
 def list_chat_messages(run_id) -> list[dict]:
@@ -149,7 +144,7 @@ def list_chat_messages(run_id) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
             "SELECT id, created_at, role, content FROM chat_messages"
-            " WHERE run_id = ? ORDER BY id ASC",
+            " WHERE run_id = %s ORDER BY id ASC",
             (run_id,),
         ).fetchall()
     return [
@@ -159,7 +154,7 @@ def list_chat_messages(run_id) -> list[dict]:
 
 def list_runs(rp_id=None) -> list[dict]:
     """Saved runs, newest first. All properties when rp_id is None."""
-    where = "WHERE rp_id = ?" if rp_id else ""
+    where = "WHERE rp_id = %s" if rp_id else ""
     params = (rp_id,) if rp_id else ()
     with _conn() as conn:
         rows = conn.execute(
@@ -192,11 +187,12 @@ def set_applied(session_id, rec_index, applied) -> None:
     with _conn() as conn:
         if applied:
             conn.execute(
-                "INSERT OR IGNORE INTO applied_recs (session_id, rec_index) VALUES (?, ?)",
+                "INSERT INTO applied_recs (session_id, rec_index) VALUES (%s, %s)"
+                " ON CONFLICT (session_id, rec_index) DO NOTHING",
                 (session_id, rec_index),
             )
         else:
             conn.execute(
-                "DELETE FROM applied_recs WHERE session_id = ? AND rec_index = ?",
+                "DELETE FROM applied_recs WHERE session_id = %s AND rec_index = %s",
                 (session_id, rec_index),
             )

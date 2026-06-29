@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { pipelineStep } from "@/api";
 import AddressSearch from "@/components/AddressSearch";
+import TopBar from "@/components/TopBar";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,19 +123,15 @@ export default function Playground() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-xl">
-        <div className="max-w-[960px] mx-auto px-6 h-16 flex items-center gap-3">
-          <span className="font-semibold tracking-tight">{version} Pipeline Playground</span>
-          <a href="/" className="btn-soft">← Estimator</a>
-          <div className="flex gap-1">
-            {["v2", "v3"].map((v) => (
-              <button key={v} onClick={() => setVersion(v)}
-                className={`btn-soft ${version === v ? "text-foreground font-semibold" : ""}`}>{v}</button>
-            ))}
-          </div>
-          <span className="text-[13px] text-muted-foreground ml-auto truncate">{picked ? <><b className="text-foreground">{picked.address}</b> · rp_id {picked.rpId}</> : "No property selected"}</span>
+      <TopBar>
+        <div className="flex gap-1">
+          {["v2", "v3"].map((v) => (
+            <button key={v} onClick={() => setVersion(v)}
+              className={`btn-soft ${version === v ? "is-active" : ""}`}>{v}</button>
+          ))}
         </div>
-      </header>
+        <span className="text-[13px] text-muted-foreground truncate">{picked ? <><b className="text-foreground">{picked.address}</b> · rp_id {picked.rpId}</> : "No property selected"}</span>
+      </TopBar>
 
       <main className="max-w-[960px] mx-auto p-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">

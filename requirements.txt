@@ -5,6 +5,7 @@ pydantic-settings==2.7.1
 python-dotenv==1.0.1
 openai==2.38.0
 httpx==0.28.1
+psycopg[binary]==3.3.4
 
 # Places365 room classifier (v2 observe hint). Install the CPU builds with:
 #   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu

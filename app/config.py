@@ -23,9 +23,17 @@ class Settings(BaseSettings):
     # Relative paths resolve from the estimator-api/ service root.
     estimator_prompt_file: str = "estimator_prompt.txt"
 
-    # Shared secret required in the `secret-sauce` header. Optional: if unset,
-    # the auth dependency is a no-op (handy for local dev).
+    # Shared secret required in the `secret-sauce` header — used by machine
+    # callers. The auth gate accepts it as a bypass; browsers use SSO instead.
     api_key: str | None = None
+
+    # Microsoft Entra ID (Azure AD) SSO. When all four are set, the whole app is
+    # gated behind interactive login (machine callers still pass via `api_key`).
+    # Unset → SSO is off; with `api_key` also unset the gate is a no-op (local dev).
+    azure_tenant_id: str | None = None
+    azure_client_id: str | None = None
+    azure_client_secret: str | None = None
+    session_secret: str | None = None  # signs the login session cookie
 
     # Default Gemini model when the request does not specify one.
     # Set the exact API id here (vision-capable Gemini Flash).
@@ -61,6 +69,15 @@ class Settings(BaseSettings):
     # /api/salesforce/query and sends SALESFORCE_API_KEY as the X-API-KEY header.
     salesforce_api_url: str = "http://localhost:5172"
     salesforce_api_key: str | None = None
+
+    # Postgres for the pipeline run harness (app/opportunities). Stores opportunity
+    # snapshots + every pipeline estimate; supports parallel workers. e.g.
+    # postgresql://user:pass@host:5432/training . Unset → the harness can't run.
+    training_db_url: str | None = None
+
+    # Salesforce org base URL (My Domain), used to build clickable Opportunity
+    # record links in the /training viewer. e.g. https://acme.lightning.force.com
+    salesforce_org_url: str = "https://duotax.lightning.force.com"
 
     # In-process Places365 room classifier that hints the v2 observe step. Flip
     # off to skip it; it also self-disables (no-op) when torch or the weights are

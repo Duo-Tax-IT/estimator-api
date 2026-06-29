@@ -119,14 +119,69 @@ def _extension_row(structural, property_data, state, factors, library):
     return row, decision
 
 
+# Speculative $/sqm rate for a full (gut) renovation — a PLACEHOLDER to verify and
+# tune (ideally from completed jobs' BuildCost ÷ GFA). Override per-run via
+# config.gutRatePerSqm.
+GUT_RATE_PER_SQM = 2000.0
+
+GUT_DISCLAIMER = (
+    "A full (gut) renovation was detected. The 'Full Renovation' line is a "
+    "speculative whole-dwelling estimate sized from floor area — NOT an itemised "
+    "measure. Verify the rate and amount before relying on it."
+)
+
+
+def _gut_row(gut: dict, gfa: dict | None, state, factors: dict, rate: float,
+             itemized_total: float = 0.0):
+    """A speculative whole-dwelling row when the analyze step flags a full (gut)
+    renovation, sized off total GFA × `rate` (BCI-scaled at the gut's year).
+
+    To avoid double-counting, the detected items are treated as measured components
+    of the gut, so this row is only the BALANCE to the whole-dwelling estimate
+    (whole − itemized). total then = itemized + balance = the whole-dwelling figure.
+    Flagged `needsReview`. (None, decision) when no gut is detected."""
+    if not gut.get("detected") or not gfa:
+        return None, {"applied": False, "reason": "no gut renovation detected"}
+    area = round(sum(gfa.values()), 1)  # buckets sum to the full floor area
+    if area <= 0:
+        return None, {"applied": False, "reason": "no GFA"}
+    year = str(gut.get("estimatedYear") or "")
+    factor = _bci_factor(state, year, factors)
+    whole = rate * area * factor
+    balance = max(0.0, whole - itemized_total)  # detected items already cover the rest
+    evidence = "; ".join(gut.get("evidence") or [])
+    reason = (
+        f"Full (gut) renovation detected ({gut.get('confidence') or 'unknown'} confidence). "
+        + (f"Why: {evidence}. " if evidence else "")
+        + f"Whole-dwelling estimate = GFA {area:g} m² × ${rate:,.0f}/m²"
+        + (f" × BCI {factor:.2f}{f' ({year})' if year else ''}" if factor != 1.0 else "")
+        + f" = ${whole:,.0f}; ${itemized_total:,.0f} captured by the detected items "
+          f"above, so this balance = ${balance:,.0f}. Speculative — verify."
+    )
+    row = {
+        "_id": None, "Name": "Full Renovation balance (ESTIMATE — verify)", "Unit": "sqm",
+        "DefaultRate": rate, "Quantity": area, "Factor": factor,
+        "parentName": None, "groupPath": [], "FinalCost": balance,
+        "Year": year, "needsReview": True, "Reason": reason,
+    }
+    decision = {"applied": True, "rate": rate, "area": area, "year": year,
+                "factor": factor, "confidence": gut.get("confidence"),
+                "wholeDwelling": whole, "itemized": itemized_total, "balance": balance,
+                "reason": reason}
+    return row, decision
+
+
 def apply_year_guard(validated: list, candidates: dict, property_data: dict) -> list:
     """Drop candidates dated at/before original construction — that's the original
     build, not a renovation (guards "new build + modern finish" false positives).
-    Rejected ones are appended to `candidates['rejectedCandidates']`."""
+    Rejected ones are appended to `candidates['rejectedCandidates']`; the original
+    candidate objects are also kept in `candidates['yearGuardRejected']` so a
+    gut-reno pass can resurface them as needs-review rows."""
     year_built = str(property_data.get("yearBuilt", "")).strip()
     if not year_built.isdigit():
         return validated
     rejects = candidates.setdefault("rejectedCandidates", [])
+    dropped = candidates.setdefault("yearGuardRejected", [])
     kept = []
     for c in validated:
         y = str(c.get("estimatedYear", ""))
@@ -137,6 +192,7 @@ def apply_year_guard(validated: list, candidates: dict, property_data: dict) -> 
                 "reason": f"estimatedYear {y} <= yearBuilt {year_built} (original build)",
                 "evidence": "",
             })
+            dropped.append(c)
         else:
             kept.append(c)
     return kept
@@ -144,7 +200,7 @@ def apply_year_guard(validated: list, candidates: dict, property_data: dict) -> 
 
 def price_validated(
     req: EstimateRequest, ctx: dict, validated: list, observations: dict,
-    structural: dict | None = None,
+    structural: dict | None = None, gut: dict | None = None,
 ) -> dict:
     """Step 3 — price (deterministic; same expand/dedup/price path as v1).
 
@@ -189,6 +245,16 @@ def price_validated(
     for reno in renovations:
         reno["Year"] = years.get(reno["_id"], "")
 
+    # Speculative whole-dwelling row when a full (gut) renovation is detected. Sized
+    # off total GFA, but only the BALANCE over the detected items (which are its
+    # components) — so the total reaches the whole-dwelling figure without double
+    # counting. Appended after the per-item Year pass (it carries its own Year).
+    rate = (req.config or {}).get("gutRatePerSqm", GUT_RATE_PER_SQM)
+    itemized_total = sum(r.get("FinalCost", 0) for r in renovations)
+    gut_row, gut_decision = _gut_row(gut or {}, gfa, state, factors, rate, itemized_total)
+    if gut_row:
+        renovations.append(gut_row)
+
     total = sum(r.get("FinalCost", 0) for r in renovations)
     # Tags each renovation's Owner in place; must run before _format_renovations.
     owner_totals = split_by_owner(renovations, req.settlement_date)
@@ -201,4 +267,5 @@ def price_validated(
         "factors": factors,
         "paintDecision": paint_decision,
         "extensionDecision": ext_decision,
+        "gutDecision": gut_decision,
     }

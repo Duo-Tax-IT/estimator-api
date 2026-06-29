@@ -3,6 +3,7 @@ import { getSessions, getApplied, markApplied } from "@/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import TopBar from "@/components/TopBar";
 
 const PRIORITY = { high: 0, medium: 1, low: 2 };
 
@@ -59,13 +60,7 @@ export default function Suggestions() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-xl">
-        <div className="max-w-[900px] mx-auto px-6 h-16 flex items-center gap-3">
-          <span className="font-semibold tracking-tight">Tuning recommendations — all runs</span>
-          <a href="/learn" className="btn-soft ml-auto">← Learning</a>
-          <a href="/" className="btn-soft">Estimator</a>
-        </div>
-      </header>
+      <TopBar />
 
       <main className="max-w-[900px] mx-auto p-5 space-y-4">
         <div className="flex items-center gap-3">

@@ -150,20 +150,28 @@ def fetch_property(rp_id: str) -> dict:
 
 
 def extract_sale(payload: dict) -> dict | None:
-    """The property's last sale from an rpdata payload, or None.
+    """The property's last sale + sale campaign from an rpdata payload, or None.
 
-    Narrows rpdata's `lastSale` block to the fields that inform an estimate: the
-    price, the contract/settlement dates, and whether it was an arms-length
-    (genuine market) transaction. Returns None when no priced sale is present.
+    Narrows rpdata's `lastSale` block (price, contract/settlement dates, whether
+    it was an arms-length genuine-market transaction) and the `saleCampaign`
+    listing (method, sale date, price guide, days on market) to the fields that
+    inform an estimate. Returns None when no priced sale is present.
     """
     sale = payload.get("lastSale")
     if not isinstance(sale, dict) or not sale.get("price"):
         return None
+    campaign = payload.get("saleCampaign")
     return {
         "price": int(sale["price"]),
         "contractDate": sale.get("contractDate"),
         "settlementDate": sale.get("settlementDate"),
         "isArmsLength": sale.get("isArmsLength"),
+        "saleCampaign": {
+            "saleDate": campaign.get("saleDate"),
+            "listingMethod": campaign.get("listingMethod"),
+            "priceDescription": campaign.get("priceDescription"),
+            "daysOnMarket": campaign.get("daysOnMarket"),
+        } if isinstance(campaign, dict) else None,
     }
 
 

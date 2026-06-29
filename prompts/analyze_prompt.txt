@@ -12,8 +12,9 @@ after the image. A predicted room type from a separate image classifier may also
 appear, e.g. `Predicted room type: Kitchen (confidence 82%)` — treat it as a
 hint, never ground truth.
 
-You must return THREE things in one STRICT JSON object (no markdown, no
-commentary): `photoObservations`, `eraAnalysis`, and `structureAnalysis`.
+You must return FIVE things in one STRICT JSON object (no markdown, no
+commentary): `photoObservations`, `eraAnalysis`, `structureAnalysis`,
+`propertyType`, and `gutRenovation`.
 
 Do NOT, in any section:
 - match to any renovation catalog or invent item names
@@ -116,6 +117,41 @@ Empty default (no comparable exterior pair, or no change):
   "confidence": "low", "evidence": [] }
 
 ================================================================================
+SECTION 4 — propertyType  (one whole-property judgment)
+================================================================================
+
+Judge the dwelling type from the photos yourself — the upstream property data
+can be wrong, so this is an independent visual read, not a confirmation.
+
+- `detected`: "house | unit | townhouse | other | unknown". "unit" covers
+  apartments/flats; "townhouse" covers attached multi-level dwellings with their
+  own entrance. Use "unknown" when the photos genuinely don't show enough.
+- `confidence`: "high | medium | low".
+- `evidence`: short concrete visual reasons — e.g. freestanding roofline and
+  private yard (house); shared corridor, lobby, balcony in a multi-storey block
+  (unit); party walls in a row with separate front doors (townhouse).
+
+================================================================================
+SECTION 5 — gutRenovation  (one whole-property judgment)
+================================================================================
+
+A gut renovation is an OLDER building whose interior has been comprehensively
+re-done — the recorded build year can be unreliable here (databases sometimes
+reset it to the reno). Judge ONLY from the photos: does the building ENVELOPE
+(brick/render, roofline, window framing, room proportions) read meaningfully
+OLDER than the interior FINISHES (kitchen, bathroom, flooring, joinery)?
+
+- `detected`: true only when an old envelope clearly houses new finishes across
+  MULTIPLE rooms — not a single upgraded room. A uniformly new building
+  (new envelope + new finishes) is a NEW BUILD, not a gut reno -> false.
+- `estimatedYear`: "YYYY" the interior fit-out most likely dates to; null if none.
+- `confidence`: "high | medium | low".
+- `evidence`: concrete envelope-vs-finish contrasts; [] if not detected.
+
+Default when not detected:
+{ "detected": false, "estimatedYear": null, "confidence": "low", "evidence": [] }
+
+================================================================================
 OUTPUT — return STRICT JSON only, exactly this shape:
 ================================================================================
 
@@ -156,5 +192,13 @@ OUTPUT — return STRICT JSON only, exactly this shape:
     "estimatedYear": "2018",
     "confidence": "high",
     "evidence": ["..."]
+  },
+  "propertyType": {
+    "detected": "house | unit | townhouse | other | unknown",
+    "confidence": "high | medium | low",
+    "evidence": ["..."]
+  },
+  "gutRenovation": {
+    "detected": false, "estimatedYear": null, "confidence": "low", "evidence": []
   }
 }

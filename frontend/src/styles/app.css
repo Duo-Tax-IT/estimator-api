@@ -33,28 +33,28 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Dark is the only theme; <html class="dark"> is set on every page. One blue
-   accent over near-black blue surfaces — restrained color, generous contrast. */
-.dark {
-  --background: #0a0c10;
-  --foreground: #eef0f4;
-  --card: #12151b;
-  --card-foreground: #eef0f4;
-  --popover: #12151b;
-  --popover-foreground: #eef0f4;
-  --primary: #6b9bff;
-  --primary-foreground: #07090d;
-  --secondary: #1a1e26;
-  --secondary-foreground: #eef0f4;
-  --muted: #1a1e26;
-  --muted-foreground: #a3acbd;
-  --accent: #19233a;
-  --accent-foreground: #eef0f4;
-  --destructive: #f87171;
-  --success: #3dd9a4;
-  --border: #232a35;
-  --input: #232a35;
-  --ring: #6b9bff;
+/* Light is the only theme; palette lives on :root so it applies everywhere and
+   shadcn's dark: variants stay off. One blue accent over white surfaces. */
+:root {
+  --background: #ffffff;
+  --foreground: #0a0c10;
+  --card: #ffffff;
+  --card-foreground: #0a0c10;
+  --popover: #ffffff;
+  --popover-foreground: #0a0c10;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0a0c10;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #eef3fc;
+  --accent-foreground: #0a0c10;
+  --destructive: #dc2626;
+  --success: #16a34a;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #2563eb;
   --radius: 0.85rem;
 }
 

@@ -1,11 +1,12 @@
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .auth import register_auth
 from .config import get_settings
 from .errors import (
     ItemsFetchError,
@@ -39,6 +40,7 @@ from .chat import build_chat_reply
 from .learning import build_learning_analysis
 from .prompts import get_base_prompt
 from .clients.rpdata_client import build_photos_zip, fetch_photos, search_addresses
+from .opportunities import store as training_store
 from .runs_db import (
     get_run,
     list_applied,
@@ -106,6 +108,27 @@ def learn_page() -> FileResponse:
 def suggestions_page() -> FileResponse:
     """Serve the aggregated tuning-recommendations page (all runs)."""
     return FileResponse(_STATIC_DIR / "suggestions.html")
+
+
+@app.get("/training")
+def training_page() -> FileResponse:
+    """Serve the training-harness results viewer."""
+    return FileResponse(_STATIC_DIR / "training.html")
+
+
+@app.get("/training/estimates")
+def training_estimates() -> dict:
+    """Harness estimates (newest first), without the heavy estimate JSON."""
+    return {"estimates": training_store.list_estimate_summaries()}
+
+
+@app.get("/training/estimates/{estimate_id}")
+def training_estimate(estimate_id: int) -> dict:
+    """One harness estimate with its full output + the opportunity ground truth."""
+    est = training_store.get_estimate(estimate_id)
+    if not est:
+        raise HTTPException(status_code=404, detail=f"No estimate {estimate_id}")
+    return {"estimate": est}
 
 
 @app.get("/health")

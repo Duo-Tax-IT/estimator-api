@@ -50,6 +50,7 @@ def test_v3_shape_matches_v1_and_splits_master_json_into_v2_stages(monkeypatch):
         "photoObservations": [{"photoIndex": 0, "roomType": "living"}],
         "eraAnalysis": [{"photoIndex": 0, "element": "benchtop"}],
         "structureAnalysis": {},
+        "propertyType": {"detected": "unit", "confidence": "high", "evidence": ["lobby"]},
     }
     candidates = {
         "validatedCandidates": [
@@ -72,6 +73,8 @@ def test_v3_shape_matches_v1_and_splits_master_json_into_v2_stages(monkeypatch):
     assert out["Stages"]["observations"] == {"photoObservations": analysis["photoObservations"]}
     assert out["Stages"]["eraAnalysis"] == {"eraAnalysis": analysis["eraAnalysis"]}
     assert out["Stages"]["structuralChange"] == {}
+    # The model's own dwelling-type read is surfaced for audit vs rpdata.
+    assert out["Stages"]["propertyType"]["detected"] == "unit"
     assert out["Stages"]["candidates"]["validatedCandidates"] == candidates["validatedCandidates"]
     assert out["Stages"]["candidates"]["rejectedCandidates"] == candidates["rejectedCandidates"]
     assert out["Meta"]["pipeline"] == "v3"
@@ -105,6 +108,35 @@ def test_v3_structure_analysis_adds_priced_house_extension_row(monkeypatch):
     assert ext[0]["Year"] == "2018"
     assert out["Stages"]["extensionAssumption"]["applied"] is True
     assert out["Stages"]["structuralChange"]["secondStoreyAdded"] is True
+
+
+def test_v3_gut_reno_resurfaces_year_guarded_candidate_as_needs_review(monkeypatch):
+    # Built 1990; a candidate dated 1990 is normally dropped by the year-guard as
+    # "original build". But a gut reno can reset the recorded build year, so when
+    # analyze flags gutRenovation the dropped match resurfaces unpriced for review.
+    _patch_upstreams(monkeypatch)
+    analysis = {
+        "photoObservations": [], "eraAnalysis": [], "structureAnalysis": {},
+        "gutRenovation": {"detected": True, "estimatedYear": "1990",
+                          "confidence": "high", "evidence": ["1970s brick shell, all-new interior"]},
+    }
+    candidates = {
+        "validatedCandidates": [
+            {"_id": "a1", "name": "Split System AC", "unit": "each",
+             "estimatedYear": "1990", "roomType": "living", "confidence": "high",
+             "evidence": [], "areaForTool": None},
+        ],
+        "rejectedCandidates": [], "summary": "",
+    }
+    _patch_stages(monkeypatch, analysis, candidates)
+
+    out = estimator_v3.build_estimate_v3(_req())
+    review = [r for r in out["Renovations"] if r.get("needsReview")]
+    assert len(review) == 1
+    assert review[0]["Name"] == "Split System AC" and review[0]["Year"] == "1990"
+    assert "FinalCost" not in review[0]          # unpriced — manual judgement only
+    assert out["Renovations Total"] == "$0.00"   # never auto-priced on a gut reno
+    assert out["Stages"]["gutRenovation"]["detected"] is True
 
 
 def test_v3_support_and_match_run_on_cheap_text_model(monkeypatch):

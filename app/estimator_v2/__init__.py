@@ -49,7 +49,7 @@ def _needs_review_row(finding: dict) -> dict:
     but unpriced and flagged, so it's never silently dropped and we can add it to
     the catalog later. Blank cost keeps it out of the totals (parseMoney('') == 0)."""
     return {
-        "Name": finding.get("observedItem", "Unidentified renovation"),
+        "Name": finding.get("observedItem") or finding.get("name", "Unidentified renovation"),
         "Year": finding.get("estimatedYear", ""),
         "needsReview": True,
     }
